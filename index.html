@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>3AS · 3D Annotation System</title>
+<style>
+  :root {
+    --bg: #141414; --panel: #1c1c1c; --panel2: #222222; --line: #333333;
+    --ink: #e8e6e3; --ink-dim: #8a8a8a; --accent: #c8a35f; --accent-dim: #6b5a3a;
+    --bad: #d06a6a; --ok: #7ab87a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 12px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  #app { height: 100%; display: flex; flex-direction: column; }
+  header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px; border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 13px; font-weight: 600; letter-spacing: .08em; }
+  header h1 b { color: var(--accent); }
+  header .file { font-size: 10px; color: var(--ink-dim); letter-spacing: .04em; }
+  header .spacer { flex: 1; }
+  button {
+    background: none; border: 1px solid var(--line); color: var(--ink-dim);
+    font: inherit; font-size: 11px; padding: 6px 14px; cursor: pointer;
+    letter-spacing: .06em;
+  }
+  button:hover { color: var(--ink); border-color: var(--ink-dim); }
+  button.on { color: var(--accent); border-color: var(--accent); }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  #viewport { flex: 1; position: relative; min-width: 0; }
+  #viewport canvas { display: block; }
+  #dropHint {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 10px; z-index: 5;
+    color: var(--ink-dim); letter-spacing: .1em; font-size: 12px;
+    border: 1px dashed var(--line); margin: 16px; pointer-events: none;
+  }
+  #dropHint b { color: var(--accent); font-size: 15px; letter-spacing: .2em; }
+  #viewport.drag #dropHint { border-color: var(--accent); color: var(--accent); }
+
+  #panel {
+    width: 460px; border-left: 1px solid var(--line);
+    display: flex; flex-direction: column; background: var(--panel);
+  }
+  #tabs { display: flex; border-bottom: 1px solid var(--line); }
+  #tabs button { flex: 1; border: none; border-right: 1px solid var(--line);
+    padding: 9px 0; font-size: 11px; }
+  #tabs button:last-child { border-right: none; }
+  #tables { flex: 1; overflow-y: auto; min-height: 0; }
+  .tt { padding: 10px 12px 4px; font-size: 10px; color: var(--ink-dim); letter-spacing: .08em; }
+  .tt b { color: var(--accent); font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+  th { text-align: left; color: var(--ink-dim); font-weight: 500; letter-spacing: .05em;
+    padding: 6px 8px; border-bottom: 1px solid var(--line); position: sticky; top: 0;
+    background: var(--panel); white-space: nowrap; }
+  td { padding: 5px 8px; border-bottom: 1px solid rgba(51,51,51,.5); vertical-align: middle; }
+  td.num { font-family: "JetBrains Mono", monospace; font-size: 10px; }
+  tr:hover td { background: rgba(200,163,95,.05); }
+  .sw { display: inline-block; width: 12px; height: 12px; border: 1px solid var(--line);
+    vertical-align: -2px; margin-right: 5px; }
+  .tag { font-size: 9px; padding: 1px 5px; border: 1px solid var(--line); color: var(--ink-dim);
+    margin-right: 3px; white-space: nowrap; }
+  .tag.req { border-color: var(--bad); color: var(--bad); }
+  .tag.ok { border-color: var(--ok); color: var(--ok); }
+  td input[type="text"] { width: 100%; background: #1b1b1b; border: 1px solid transparent;
+    color: var(--ink); font-size: 10.5px; padding: 3px 5px; outline: none; }
+  td input[type="text"]:focus { border-color: var(--accent); }
+  td input[type="checkbox"] { accent-color: var(--accent); }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 0; font-size: 10.5px; }
+  .kv div { padding: 5px 8px; border-bottom: 1px solid rgba(51,51,51,.5); }
+  .kv div:nth-child(odd) { color: var(--ink-dim); letter-spacing: .05em; }
+  .mono { font-family: "JetBrains Mono", monospace; font-size: 10px; }
+  #status { padding: 8px 16px; border-top: 1px solid var(--line);
+    font-size: 10px; color: var(--ink-dim); letter-spacing: .05em; }
+  @media (max-width: 900px) {
+    main { flex-direction: column; }
+    #panel { width: 100%; flex: 1; border-left: none; border-top: 1px solid var(--line); }
+    #viewport { flex: none; height: 40vh; }
+  }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/loaders/GLTFLoader.js": "./vendor/loaders/GLTFLoader.js",
+    "three/addons/controls/OrbitControls.js": "./vendor/controls/OrbitControls.js"
+} }
+</script>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1><b>3AS</b> · 3D Annotation System</h1>
+    <span class="file" id="fileInfo">未加载模型</span>
+    <div class="spacer"></div>
+    <button id="openBtn">打开 GLB</button>
+    <button id="sampleBtn">示例模型</button>
+    <button id="exportBtn">导出注释 JSON</button>
+    <input type="file" id="fileInput" accept=".glb" hidden>
+  </header>
+  <main>
+    <div id="viewport">
+      <div id="dropHint"><b>3AS</b><span>拖入 .glb 开始预处理</span><span id="supHint">贴图支持：PNG / JPEG（标准）· WebP / KTX2（扩展）</span></div>
+    </div>
+    <div id="panel" hidden>
+      <div id="tabs">
+        <button data-tab="mat" class="on">材质</button>
+        <button data-tab="tex">贴图</button>
+        <button data-tab="node">模型块</button>
+        <button data-tab="scene">场景</button>
+      </div>
+      <div id="tables"></div>
+    </div>
+  </main>
+  <div id="status">就绪</div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const $ = id => document.getElementById(id);
+const status = t => { $('status').textContent = t; };
+
+/* ── 3D 预览 ── */
+const viewport = $('viewport');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+viewport.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x141414);
+const camera = new THREE.PerspectiveCamera(36, 1, 0.01, 500);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+const key = new THREE.DirectionalLight(0xffffff, 1.0);
+key.position.set(60, 90, 50);
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xffffff, 0.25);
+fill.position.set(-50, 30, -40);
+scene.add(fill);
+let gridHelper = null, frameHelper = null, model = null;
+
+function resize() {
+  const w = viewport.clientWidth, h = viewport.clientHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(viewport);
+(function anim() { requestAnimationFrame(anim); controls.update(); renderer.render(scene, camera); })();
+
+/* ── 数据模型 ── */
+let fileKey = null;          /* localStorage 键 */
+let anno = null;             /* 注释对象 */
+let raw = null;              /* gltf.parser.json */
+let tables = { mat: [], tex: [], node: [], scene: {} };
+
+function loadAnno() {
+  try { return JSON.parse(localStorage.getItem('3as:' + fileKey) || 'null'); } catch (e) { return null; }
+}
+function saveAnno() {
+  localStorage.setItem('3as:' + fileKey, JSON.stringify(anno));
+  status('注释已保存 ' + new Date().toLocaleTimeString());
+}
+
+/* ── 预处理核心 ── */
+async function preprocess(buf, fname) {
+  const gltf = await new GLTFLoader().parseAsync(buf, '');
+  raw = gltf.parser.json;
+  model = gltf.scene;
+  scene.add(model);
+
+  /* 摆位：落地居中（同查看器约定） */
+  let box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const s = 8 / Math.max(size.x, size.z, 0.001);
+  model.scale.multiplyScalar(s);
+  model.position.set(-center.x * s, -box.min.y * s, -center.z * s);
+  box = new THREE.Box3().setFromObject(model);
+  const bc = box.getCenter(new THREE.Vector3());
+  const bs = box.getSize(new THREE.Vector3());
+
+  if (gridHelper) scene.remove(gridHelper);
+  gridHelper = new THREE.GridHelper(10, 10, 0x3a3a3a, 0x242424);
+  gridHelper.position.y = 0.002;
+  scene.add(gridHelper);
+  if (frameHelper) scene.remove(frameHelper);
+  frameHelper = new THREE.Box3Helper(box, 0x6b5a3a);
+  scene.add(frameHelper);
+
+  const d = Math.max(bs.x, bs.y, bs.z);
+  camera.position.set(0, d * 0.8, d * 2.4);
+  controls.target.set(0, d * 0.45, 0);
+  controls.update();
+
+  buildTables(gltf, buf, fname, box);
+  renderTab('mat');
+  $('panel').hidden = false;
+  $('dropHint').style.display = 'none';
+}
+
+/* 工具 */
+const hex = f => f ? '#' + new THREE.Color(f[0], f[1], f[2]).getHexString() : '—';
+const num = (v, p = 2) => (v === undefined || v === null) ? '—' : (+v).toFixed(p);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function buildTables(gltf, buf, fname, box) {
+  const J = raw;
+  const imgs = J.images || [];
+  const texs = J.textures || [];
+  const mats = J.materials || [];
+  const bvs = J.bufferViews || [];
+  const accs = J.accessors || [];
+
+  /* 表1 材质 */
+  tables.mat = mats.map((m, i) => {
+    const pbr = m.pbrMetallicRoughness || {};
+    const ext = m.extensions || {};
+    const spec = ext.KHR_materials_specular || {};
+    const emStr = ext.KHR_materials_emissive_strength;
+    const usedTex = [];
+    const push = (ti, slot) => { if (ti !== undefined && texs[ti]) usedTex.push(slot + ':' + (imgs[texs[ti].source]?.name || 'img' + texs[ti].source)); };
+    push(pbr.baseColorTexture?.index, '固色');
+    push(pbr.metallicRoughnessTexture?.index, '金属粗糙');
+    push(m.normalTexture?.index, '法线');
+    push(m.occlusionTexture?.index, 'AO');
+    push(m.emissiveTexture?.index, '自发光');
+    return {
+      i, name: m.name || 'material_' + i,
+      baseColor: hex(pbr.baseColorFactor), baseColorF: pbr.baseColorFactor,
+      metal: num(pbr.metallicFactor ?? 1), rough: num(pbr.roughnessFactor ?? 1),
+      emissive: hex(m.emissiveFactor), emStr: emStr ? num(emStr.emissiveStrength ?? 1) : '—',
+      spec: spec.specularFactor !== undefined ? num(spec.specularFactor) : '—',
+      alpha: m.alphaMode || 'OPAQUE', ds: m.doubleSided ? '双面' : '单面',
+      tex: usedTex.join(' ') || '—',
+    };
+  });
+
+  /* 表2 贴图（含字节数与尺寸，异步补尺寸） */
+  tables.tex = imgs.map((im, i) => {
+    const bv = bvs[im.bufferView];
+    const usedBy = [];
+    tables.mat.forEach(mt => { /* 由表1 usedTex 反查 */ });
+    const slots = [];
+    mats.forEach((m, mi) => {
+      const pbr = m.pbrMetallicRoughness || {};
+      const chk = (t, slot) => { if (t && texs[t.index] && texs[t.index].source === i) slots.push((m.name || 'mat' + mi) + '·' + slot); };
+      chk(pbr.baseColorTexture, '固色'); chk(pbr.metallicRoughnessTexture, '金属粗糙');
+      chk(m.normalTexture, '法线'); chk(m.occlusionTexture, 'AO'); chk(m.emissiveTexture, '自发光');
+    });
+    return {
+      i, name: im.name || 'image_' + i, mime: im.mimeType || '—',
+      bytes: bv ? bv.byteLength : 0, dims: '…', used: slots.join(' ') || '—',
+      _bv: bv,
+    };
+  });
+  /* 异步解尺寸 */
+  tables.tex.forEach(async (t) => {
+    if (!t._bv) { t.dims = '—'; return; }
+    try {
+      const slice = buf.slice(t._bv.byteOffset || 0, (t._bv.byteOffset || 0) + t._bv.byteLength);
+      const bmp = await createImageBitmap(new Blob([slice], { type: t.mime }));
+      t.dims = bmp.width + '×' + bmp.height;
+      bmp.close();
+      if (currentTab === 'tex') renderTab('tex');
+    } catch (e) { t.dims = '无法解码'; }
+  });
+
+  /* 表3 模型块（网格节点） */
+  const parentOf = {};
+  (J.nodes || []).forEach((n, ni) => (n.children || []).forEach(c => parentOf[c] = ni));
+  tables.node = (J.nodes || []).map((n, ni) => ({ n, ni })).filter(o => o.n.mesh !== undefined).map(o => {
+    const n = o.n, mesh = J.meshes[n.mesh];
+    let verts = 0, tris = 0;
+    (mesh.primitives || []).forEach(p => {
+      if (p.attributes?.POSITION !== undefined) verts += accs[p.attributes.POSITION]?.count || 0;
+      if (p.indices !== undefined) tris += Math.round((accs[p.indices]?.count || 0) / 3);
+      else if (p.attributes?.POSITION !== undefined) tris += Math.round((accs[p.attributes.POSITION]?.count || 0) / 3);
+    });
+    const attrs = new Set();
+    (mesh.primitives || []).forEach(p => Object.keys(p.attributes || {}).forEach(a => attrs.add(a)));
+    /* TRS：matrix 分解或直接读 */
+    let T = [0, 0, 0], R = [0, 0, 0, 1], S = [1, 1, 1];
+    if (n.matrix) {
+      const M = new THREE.Matrix4().fromArray(n.matrix);
+      const t = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
+      M.decompose(t, q, sc); T = t.toArray(); R = q.toArray(); S = sc.toArray();
+    } else {
+      if (n.translation) T = n.translation;
+      if (n.rotation) R = n.rotation;
+      if (n.scale) S = n.scale;
+    }
+    const eu = new THREE.Euler().setFromQuaternion(new THREE.Quaternion(...R), 'XYZ');
+    const pni = parentOf[o.ni];
+    return {
+      ni: o.ni, name: n.name || 'node_' + o.ni,
+      parent: pni !== undefined ? (J.nodes[pni].name || 'node_' + pni) : '—',
+      verts, tris,
+      attrs: [...attrs].join(' '),
+      T: T.map(v => +v.toFixed(3)), Rdeg: [eu.x, eu.y, eu.z].map(v => +(v * 180 / Math.PI).toFixed(1)), S: S.map(v => +v.toFixed(3)),
+    };
+  });
+
+  /* 表4 场景 */
+  const size = box.getSize(new THREE.Vector3());
+  const cen = box.getCenter(new THREE.Vector3());
+  tables.scene = {
+    '文件名': fname,
+    '文件大小': (buf.byteLength / 1048576).toFixed(2) + ' MB',
+    'glTF 版本': J.asset?.version || '—',
+    '生成器': J.asset?.generator || '—',
+    '包围盒尺寸': [size.x, size.y, size.z].map(v => (v * 1000).toFixed(0) + 'mm').join(' × '),
+    '默认中心点': [cen.x, cen.y, cen.z].map(v => (v * 1000).toFixed(0)).join(', ') + ' mm',
+    '材质 / 贴图 / 网格块': `${mats.length} / ${imgs.length} / ${tables.node.length}`,
+    '顶点 / 三角面': tables.node.reduce((a, b) => a + b.verts, 0) + ' / ' + tables.node.reduce((a, b) => a + b.tris, 0),
+    '扩展使用': (J.extensionsUsed || []).join(', ') || '无',
+    '扩展必需': (J.extensionsRequired || []).join(', ') || '无',
+    '动画 / 蒙皮': (J.animations?.length || 0) + ' / ' + (J.skins?.length || 0),
+    '光照': '环境 0.39 + 主光 1.04 + 补光 0.26（查看器默认）',
+    '边缘框': '显示占地金色边框（查看器默认开）',
+  };
+  tables.scene['默认相机'] = `pos(0, ${(size.y * 0.5).toFixed(1)}, ${(Math.max(size.x, size.z) * 2.2).toFixed(1)}) target(0, ${(size.y * 0.45).toFixed(1)}, 0)`;
+
+  /* 注释对象（保留已有注释） */
+  const old = anno || {};
+  anno = {
+    file: fname, updated: Date.now(),
+    nodes: old.nodes || {},      /* name -> {visible, allowEdit, alias, note} */
+    matNotes: old.matNotes || {},
+    texNotes: old.texNotes || {},
+    sceneNote: old.sceneNote || '',
+  };
+}
+
+/* ── 表格渲染 ── */
+let currentTab = 'mat';
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => renderTab(b.dataset.tab));
+
+function nodeAnno(name) {
+  if (!anno.nodes[name]) anno.nodes[name] = { visible: true, allowEdit: true, alias: '', note: '' };
+  return anno.nodes[name];
+}
+
+function renderTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+  const el = $('tables');
+  if (!anno) { el.innerHTML = ''; return; }
+
+  if (tab === 'mat') {
+    el.innerHTML = `<div class="tt">共 <b>${tables.mat.length}</b> 个材质 · PBR 金属度/粗糙度工作流${raw.extensionsUsed?.includes('KHR_materials_specular') ? ' · 含高光扩展' : ''}</div>
+    <table><thead><tr><th>#</th><th>名称</th><th>漫反射</th><th>金属</th><th>粗糙</th><th>高光</th><th>自发光</th><th>混合/面</th><th>贴图槽</th><th>备注</th></tr></thead>
+    <tbody>${tables.mat.map(m => `<tr>
+      <td class="num">${m.i}</td><td>${esc(m.name)}</td>
+      <td><span class="sw" style="background:${m.baseColor === '—' ? '#000' : m.baseColor}"></span><span class="mono">${m.baseColor}</span></td>
+      <td class="num">${m.metal}</td><td class="num">${m.rough}</td><td class="num">${m.spec}</td>
+      <td>${m.emissive !== '—' ? `<span class="sw" style="background:${m.emissive}"></span>` : ''}<span class="mono">${m.emissive}${m.emStr !== '—' ? ' ×' + m.emStr : ''}</span></td>
+      <td><span class="tag">${m.alpha}</span><span class="tag">${m.ds}</span></td>
+      <td class="mono">${esc(m.tex)}</td>
+      <td><input type="text" data-mat="${m.i}" value="${esc(anno.matNotes[m.i] || '')}" placeholder="备注"></td>
+    </tr>`).join('')}</tbody></table>`;
+    el.querySelectorAll('input[data-mat]').forEach(inp => inp.onchange = () => { anno.matNotes[inp.dataset.mat] = inp.value; saveAnno(); });
+  }
+
+  if (tab === 'tex') {
+    el.innerHTML = `<div class="tt">共 <b>${tables.tex.length}</b> 张贴图 · 支持格式：PNG/JPEG（标准）· WebP（EXT_texture_webp）· KTX2（KHR_texture_basisu）</div>
+    <table><thead><tr><th>#</th><th>名称</th><th>格式</th><th>尺寸</th><th>体积</th><th>被用于</th><th>备注</th></tr></thead>
+    <tbody>${tables.tex.map(t => `<tr>
+      <td class="num">${t.i}</td><td>${esc(t.name)}</td>
+      <td><span class="tag ${/png|jpeg/.test(t.mime) ? 'ok' : ''}">${t.mime}</span></td>
+      <td class="num">${t.dims}</td>
+      <td class="num">${t.bytes ? (t.bytes / 1024).toFixed(0) + ' KB' : '—'}</td>
+      <td class="mono">${esc(t.used)}</td>
+      <td><input type="text" data-tex="${t.i}" value="${esc(anno.texNotes[t.i] || '')}" placeholder="备注"></td>
+    </tr>`).join('')}</tbody></table>`;
+    el.querySelectorAll('input[data-tex]').forEach(inp => inp.onchange = () => { anno.texNotes[inp.dataset.tex] = inp.value; saveAnno(); });
+  }
+
+  if (tab === 'node') {
+    el.innerHTML = `<div class="tt">共 <b>${tables.node.length}</b> 个网格块 · 「默认显示/允许编辑」为注释，导出后供查看器消费</div>
+    <table><thead><tr><th>名称</th><th>属于</th><th>顶点/三角</th><th>通道</th><th>移动 T</th><th>旋转 R°</th><th>缩放 S</th><th>显示</th><th>允许</th><th>备注名称</th><th>备注</th></tr></thead>
+    <tbody>${tables.node.map(n => {
+      const a = nodeAnno(n.name);
+      return `<tr>
+      <td>${esc(n.name)}</td><td class="mono">${esc(n.parent)}</td>
+      <td class="num">${n.verts}/${n.tris}</td><td class="mono">${esc(n.attrs)}</td>
+      <td class="num">${n.T.join(',')}</td><td class="num">${n.Rdeg.join(',')}</td><td class="num">${n.S.join(',')}</td>
+      <td><input type="checkbox" data-nvis="${esc(n.name)}" ${a.visible ? 'checked' : ''}></td>
+      <td><input type="checkbox" data-nedit="${esc(n.name)}" ${a.allowEdit ? 'checked' : ''}></td>
+      <td><input type="text" data-nalias="${esc(n.name)}" value="${esc(a.alias)}" placeholder="别名"></td>
+      <td><input type="text" data-nnote="${esc(n.name)}" value="${esc(a.note)}" placeholder="备注"></td>
+    </tr>`; }).join('')}</tbody></table>`;
+    el.querySelectorAll('input[data-nvis]').forEach(inp => inp.onchange = () => { nodeAnno(inp.dataset.nvis).visible = inp.checked; saveAnno(); });
+    el.querySelectorAll('input[data-nedit]').forEach(inp => inp.onchange = () => { nodeAnno(inp.dataset.nedit).allowEdit = inp.checked; saveAnno(); });
+    el.querySelectorAll('input[data-nalias]').forEach(inp => inp.onchange = () => { nodeAnno(inp.dataset.nalias).alias = inp.value; saveAnno(); });
+    el.querySelectorAll('input[data-nnote]').forEach(inp => inp.onchange = () => { nodeAnno(inp.dataset.nnote).note = inp.value; saveAnno(); });
+  }
+
+  if (tab === 'scene') {
+    el.innerHTML = `<div class="tt">场景元数据与查看器默认配置</div>
+    <div class="kv">${Object.entries(tables.scene).map(([k, v]) => `<div>${esc(k)}</div><div class="mono">${esc(v)}</div>`).join('')}</div>
+    <div class="tt">整档备注</div>
+    <div style="padding:0 12px 12px"><input type="text" id="sceneNote" style="width:100%;background:#1b1b1b;border:1px solid var(--line);color:var(--ink);font-size:11px;padding:6px 8px;outline:none" value="${esc(anno.sceneNote)}" placeholder="这个 glb 的整体备注"></div>`;
+    $('sceneNote').onchange = (e) => { anno.sceneNote = e.target.value; saveAnno(); };
+  }
+}
+
+/* ── 打开文件 ── */
+async function openBuf(buf, fname) {
+  status('预处理中…');
+  fileKey = fname + ':' + buf.byteLength;
+  anno = loadAnno();
+  try {
+    await preprocess(buf, fname);
+    $('fileInfo').textContent = `${fname} · ${(buf.byteLength / 1048576).toFixed(2)} MB · ${raw.materials?.length || 0} 材质 · ${raw.images?.length || 0} 贴图 · ${tables.node.length} 块`;
+    status('预处理完成' + (loadAnno() ? '（已恢复历史注释）' : ''));
+  } catch (e) {
+    console.error(e);
+    status('解析失败：' + e.message);
+  }
+}
+
+$('openBtn').onclick = () => $('fileInput').click();
+$('fileInput').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  openBuf(await f.arrayBuffer(), f.name);
+};
+$('sampleBtn').onclick = async () => {
+  status('下载示例模型…');
+  const paths = ['../huagao3d/chengdu-huagao-0801.glb', '../3ds-viewer/chengdu-huagao-0801.glb', './chengdu-huagao-0801.glb'];
+  for (const p of paths) {
+    try {
+      const r = await fetch(p);
+      if (r.ok) { openBuf(await r.arrayBuffer(), 'chengdu-huagao-0801.glb'); return; }
+    } catch (e) { /* 下一个 */ }
+  }
+  status('示例模型不可达');
+};
+viewport.addEventListener('dragover', e => { e.preventDefault(); viewport.classList.add('drag'); });
+viewport.addEventListener('dragleave', () => viewport.classList.remove('drag'));
+viewport.addEventListener('drop', async e => {
+  e.preventDefault();
+  viewport.classList.remove('drag');
+  const f = e.dataTransfer.files[0];
+  if (f && f.name.endsWith('.glb')) openBuf(await f.arrayBuffer(), f.name);
+});
+
+/* ── 导出 ── */
+$('exportBtn').onclick = () => {
+  if (!anno) { status('先加载模型'); return; }
+  const out = {
+    system: '3AS v1', file: anno.file, exported: new Date().toISOString(),
+    scene: tables.scene, materials: tables.mat, textures: tables.tex.map(({ _bv, ...t }) => t),
+    nodes: tables.node,
+    annotations: anno,
+  };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 1)], { type: 'application/json' }));
+  a.download = anno.file.replace(/\.glb$/i, '') + '.3as.json';
+  a.click();
+  status('已导出 ' + a.download);
+};
+
+resize();
+</script>
+</body>
+</html>
