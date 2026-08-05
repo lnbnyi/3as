@@ -60,6 +60,7 @@ python3 -m http.server 8000
 - **自发光**：emissiveFactor HEX + KHR_materials_emissive_strength 倍数
 - **混合/面**：alphaMode（OPAQUE/MASK/BLEND）+ 单面/双面
 - **贴图槽**：已使用的贴图槽（固色:img0 金属粗糙:img1 法线:img2 …）
+- **用于节点**：反查该材质被哪些模型块（节点）引用——CAD 类导出常见材质名统一为 `fallback Material`、无贴图，仅靠名称和色块难以分辨用途时，靠这一列定位
 - **备注**：可编辑文本框，输入材质用途说明
 
 **用途**：
@@ -100,9 +101,8 @@ python3 -m http.server 8000
 - **属于**：父节点名（顶层节点显示 `—`）
 - **顶点/三角**：所有 primitive 的顶点数与三角面数总和
 - **通道**：顶点属性（POSITION NORMAL TEXCOORD_0 COLOR_0 …）
-- **移动 T**：translation（x, y, z，米）
-- **旋转 R°**：rotation 四元数转欧拉角（x°, y°, z°）
-- **缩放 S**：scale（x, y, z）
+- **材质**：该节点各 primitive 引用的材质索引（色块+编号），一个节点可能挂多个材质 ID（3ds Max Multi/Sub-Object 材质按 ID 拆分 primitive 就是这种情况）
+- **移动 T / 旋转 R° / 缩放 S**：**世界空间**变换（沿父链累乘后分解），不是节点自身的 local matrix——glTF 导出常把网格节点包一层无名父节点承载真实摆位，只看 local 值会看到恒等/占位数据
 - **显示**：复选框，查看器默认是否显示该节点（注释字段）
 - **允许**：复选框，查看器是否允许用户编辑该节点（注释字段）
 - **备注名称**：别名（查看器 UI 显示名）
@@ -193,6 +193,28 @@ python3 -m http.server 8000
 - 交付给查看器（如 huagao3d），读取 `annotations.nodes` 配置默认显隐/编辑权限
 - 项目文档归档
 - 版本控制（与 GLB 一起存储）
+
+---
+
+## 3ds Max 导出建议（V-Ray 场景）
+
+**背景**：3ds Max 自带的 glTF 导出器（File → Export → glTF，底层是 Autodesk ATF → GLTFConsumer）只认识 Physical Material / Standard Surface，**不认识 VRayMtl**。场景里的材质如果还是 V-Ray 材质，导出的 GLB 里每个材质都会摊成一个叫 `fallback Material` 的纯黑色兜底材质，没有金属度/粗糙度/贴图——3AS 项目里 `glb/0A_JIMMYCHOO_CD260804.glb` 这份实测样品就是这个状况（17 个材质全是 `fallback Material`，0 张贴图）。用 3AS 打开一份 GLB 后，如果材质表里名称清一色 `fallback Material`、漫反射清一色 `#000000`、贴图表是空的，基本就能确诊是这个问题，不是 3AS 解析错了。
+
+**推荐先试的免费/原生路线**：
+1. 场景里的 `VRayMtl` 先转换成 3ds Max 原生材质再导出。Autodesk 3ds Max **2023.2 起自带 Physical Material → glTF 的转换能力**、以及独立的 **glTF Material** 材质类型（Material/Map Browser → General → glTF Material），官方发布说明见下方链接。具体菜单路径请以你安装的 3ds Max 版本为准自行核实——这一步我没有 3ds Max 环境能替你跑一遍，只能给到 Autodesk 官方文档和演示视频的线索。
+2. 场景里如果用了 V-Ray 的程序贴图（噪波、渐变、VRayDirt 等非 Bitmap 贴图），glTF Material 只接受 **Bitmap 贴图**作为输入，程序贴图需要先烘焙成贴图再接上去。
+3. 转换后确认材质类型确实变成了 Physical Material 或 glTF Material（而不是还挂着 VRayMtl），再执行 File → Export → glTF(.gltf/.glb)。
+4. 导出后拖进 3AS 复查：材质名称不再是 `fallback Material`、漫反射不再是纯黑、贴图表不再是空的，说明材质数据被正确读出来了。
+
+**如果原生路线太繁琐**（材质数量多、程序贴图多、手动转换成本高），备选方案：
+- **V-RayMax Converter PRO**（[ScriptSpot](https://www.scriptspot.com/3ds-max/scripts/v-raymax-converter-pro)）：付费脚本，专门做 V-Ray/Corona → glTF Material 批量转换，3ds Max 2023+ 支持。
+- **RapidPipeline**（[docs](https://docs.rapidpipeline.com/docs/rapidpipeline-cloud-tutorials/dcc-import)）：付费云平台，上传含 V-Ray 材质的 Max 场景，自动转 PBR + 烘焙贴图，出 glTF/GLB/FBX/USDZ，带 QC 报告；但模型会离开本机上传到云端，和 3AS「本地处理」的定位不同，仅作为对照的成熟方案参考。
+- **Khronos 官方 glTF 插件**（[GitHub](https://github.com/KhronosGroup/glTF-3ds-Max-Plugin)，2026-07 由 Khronos 出资开源，Apache 2.0）：主要补上「glTF 导回 3ds Max」的能力，方便导出后再拉回 Max 核对，不是材质转换工具。
+
+**参考资料**：
+- [glTF Material & Exporter — What's New in 3ds Max 2023（Autodesk 官方）](https://help.autodesk.com/view/3DSMAX/2023/ENU/?guid=GUID-EFBB037D-C4EB-42D2-9CE1-30FCAD483C31)
+- [glTF Material 参数文档 — 3ds Max 2023（Autodesk 官方）](https://help.autodesk.com/view/3DSMAX/2023/ENU/?guid=GUID-7ABFB805-1D9F-417E-9C22-704BFDF160FA)
+- [3ds Max 2023.2 — Physical material to glTF converter 演示视频](https://www.youtube.com/watch?v=vRhk08-a4o4)
 
 ---
 

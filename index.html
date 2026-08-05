@@ -279,6 +279,22 @@ function buildTables(gltf, buf, fname, box) {
   /* 表3 模型块（网格节点） */
   const parentOf = {};
   (J.nodes || []).forEach((n, ni) => (n.children || []).forEach(c => parentOf[c] = ni));
+  /* 节点自身 local matrix（matrix 或 T/R/S 组合），CAD 类导出常见「网格节点 + 无名父级壳」结构，
+     父级才携带真实摆位，故 TRS 必须沿父链累乘到世界空间，否则显示的是恒等/占位值 */
+  const localMatrix = n => {
+    if (n.matrix) return new THREE.Matrix4().fromArray(n.matrix);
+    return new THREE.Matrix4().compose(
+      new THREE.Vector3(...(n.translation || [0, 0, 0])),
+      new THREE.Quaternion(...(n.rotation || [0, 0, 0, 1])),
+      new THREE.Vector3(...(n.scale || [1, 1, 1]))
+    );
+  };
+  const worldMatrix = ni => {
+    let M = localMatrix(J.nodes[ni]);
+    let pni = parentOf[ni];
+    while (pni !== undefined) { M = localMatrix(J.nodes[pni]).multiply(M); pni = parentOf[pni]; }
+    return M;
+  };
   tables.node = (J.nodes || []).map((n, ni) => ({ n, ni })).filter(o => o.n.mesh !== undefined).map(o => {
     const n = o.n, mesh = J.meshes[n.mesh];
     let verts = 0, tris = 0;
@@ -289,27 +305,25 @@ function buildTables(gltf, buf, fname, box) {
     });
     const attrs = new Set();
     (mesh.primitives || []).forEach(p => Object.keys(p.attributes || {}).forEach(a => attrs.add(a)));
-    /* TRS：matrix 分解或直接读 */
-    let T = [0, 0, 0], R = [0, 0, 0, 1], S = [1, 1, 1];
-    if (n.matrix) {
-      const M = new THREE.Matrix4().fromArray(n.matrix);
-      const t = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
-      M.decompose(t, q, sc); T = t.toArray(); R = q.toArray(); S = sc.toArray();
-    } else {
-      if (n.translation) T = n.translation;
-      if (n.rotation) R = n.rotation;
-      if (n.scale) S = n.scale;
-    }
-    const eu = new THREE.Euler().setFromQuaternion(new THREE.Quaternion(...R), 'XYZ');
+    const matIdx = [...new Set((mesh.primitives || []).map(p => p.material).filter(v => v !== undefined))].sort((a, b) => a - b);
+    /* TRS：世界空间（沿父链累乘），供查看器直接摆位使用 */
+    const t = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
+    worldMatrix(o.ni).decompose(t, q, sc);
+    const eu = new THREE.Euler().setFromQuaternion(q, 'XYZ');
     const pni = parentOf[o.ni];
     return {
       ni: o.ni, name: n.name || 'node_' + o.ni,
       parent: pni !== undefined ? (J.nodes[pni].name || 'node_' + pni) : '—',
       verts, tris,
       attrs: [...attrs].join(' '),
-      T: T.map(v => +v.toFixed(3)), Rdeg: [eu.x, eu.y, eu.z].map(v => +(v * 180 / Math.PI).toFixed(1)), S: S.map(v => +v.toFixed(3)),
+      mats: matIdx,
+      T: t.toArray().map(v => +v.toFixed(3)), Rdeg: [eu.x, eu.y, eu.z].map(v => +(v * 180 / Math.PI).toFixed(1)), S: sc.toArray().map(v => +v.toFixed(3)),
     };
   });
+
+  /* 材质反查：哪些节点用了该材质（便于在贴图/命名缺失的 CAD 导出中定位材质） */
+  tables.mat.forEach(m => m.usedByNodes = []);
+  tables.node.forEach(n => n.mats.forEach(mi => { if (tables.mat[mi]) tables.mat[mi].usedByNodes.push(n.name); }));
 
   /* 表4 场景 */
   const size = box.getSize(new THREE.Vector3());
@@ -359,7 +373,7 @@ function renderTab(tab) {
 
   if (tab === 'mat') {
     el.innerHTML = `<div class="tt">共 <b>${tables.mat.length}</b> 个材质 · PBR 金属度/粗糙度工作流${raw.extensionsUsed?.includes('KHR_materials_specular') ? ' · 含高光扩展' : ''}</div>
-    <table><thead><tr><th>#</th><th>名称</th><th>漫反射</th><th>金属</th><th>粗糙</th><th>高光</th><th>自发光</th><th>混合/面</th><th>贴图槽</th><th>备注</th></tr></thead>
+    <table><thead><tr><th>#</th><th>名称</th><th>漫反射</th><th>金属</th><th>粗糙</th><th>高光</th><th>自发光</th><th>混合/面</th><th>贴图槽</th><th>用于节点</th><th>备注</th></tr></thead>
     <tbody>${tables.mat.map(m => `<tr>
       <td class="num">${m.i}</td><td>${esc(m.name)}</td>
       <td><span class="sw" style="background:${m.baseColor === '—' ? '#000' : m.baseColor}"></span><span class="mono">${m.baseColor}</span></td>
@@ -367,6 +381,7 @@ function renderTab(tab) {
       <td>${m.emissive !== '—' ? `<span class="sw" style="background:${m.emissive}"></span>` : ''}<span class="mono">${m.emissive}${m.emStr !== '—' ? ' ×' + m.emStr : ''}</span></td>
       <td><span class="tag">${m.alpha}</span><span class="tag">${m.ds}</span></td>
       <td class="mono">${esc(m.tex)}</td>
+      <td class="mono">${esc(m.usedByNodes.join(' ') || '—')}</td>
       <td><input type="text" data-mat="${m.i}" value="${esc(anno.matNotes[m.i] || '')}" placeholder="备注"></td>
     </tr>`).join('')}</tbody></table>`;
     el.querySelectorAll('input[data-mat]').forEach(inp => inp.onchange = () => { anno.matNotes[inp.dataset.mat] = inp.value; saveAnno(); });
@@ -387,13 +402,17 @@ function renderTab(tab) {
   }
 
   if (tab === 'node') {
-    el.innerHTML = `<div class="tt">共 <b>${tables.node.length}</b> 个网格块 · 「默认显示/允许编辑」为注释，导出后供查看器消费</div>
-    <table><thead><tr><th>名称</th><th>属于</th><th>顶点/三角</th><th>通道</th><th>移动 T</th><th>旋转 R°</th><th>缩放 S</th><th>显示</th><th>允许</th><th>备注名称</th><th>备注</th></tr></thead>
+    el.innerHTML = `<div class="tt">共 <b>${tables.node.length}</b> 个网格块 · 「默认显示/允许编辑」为注释，导出后供查看器消费 · 移动/旋转/缩放为世界空间（沿父链累乘）</div>
+    <table><thead><tr><th>名称</th><th>属于</th><th>顶点/三角</th><th>通道</th><th>材质</th><th>移动 T</th><th>旋转 R°</th><th>缩放 S</th><th>显示</th><th>允许</th><th>备注名称</th><th>备注</th></tr></thead>
     <tbody>${tables.node.map(n => {
       const a = nodeAnno(n.name);
+      const matChips = n.mats.length
+        ? n.mats.map(mi => `<span class="sw" style="background:${tables.mat[mi] && tables.mat[mi].baseColor !== '—' ? tables.mat[mi].baseColor : '#000'}" title="${esc(tables.mat[mi] ? tables.mat[mi].name : 'mat' + mi)}"></span>${mi}`).join(' ')
+        : '—';
       return `<tr>
       <td>${esc(n.name)}</td><td class="mono">${esc(n.parent)}</td>
       <td class="num">${n.verts}/${n.tris}</td><td class="mono">${esc(n.attrs)}</td>
+      <td class="mono">${matChips}</td>
       <td class="num">${n.T.join(',')}</td><td class="num">${n.Rdeg.join(',')}</td><td class="num">${n.S.join(',')}</td>
       <td><input type="checkbox" data-nvis="${esc(n.name)}" ${a.visible ? 'checked' : ''}></td>
       <td><input type="checkbox" data-nedit="${esc(n.name)}" ${a.allowEdit ? 'checked' : ''}></td>

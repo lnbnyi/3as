@@ -38,6 +38,7 @@ interface Material {
   alpha: string;            // 混合模式："OPAQUE" | "MASK" | "BLEND"
   ds: string;               // 面："单面" | "双面"
   tex: string;              // 使用的贴图槽，如 "固色:img0 法线:img2"
+  usedByNodes: string[];    // 反查：哪些节点（网格块）引用了该材质
 }
 ```
 
@@ -46,6 +47,7 @@ interface Material {
 - `emStr`：来自 `KHR_materials_emissive_strength.emissiveStrength`，标准值 1.0，扩展可 > 1
 - `spec`：来自 `KHR_materials_specular.specularFactor`，仅当扩展存在时有值
 - `tex`：人类可读的贴图槽摘要，格式 `<槽名>:<图片名>`，多个槽用空格分隔
+- `usedByNodes`：从 `nodes[].mats` 反向聚合得到，用于在无贴图/材质名统一为 "fallback Material" 的 CAD 类导出（如 3ds Max ATF 导出）中定位材质对应的实际部件
 
 ---
 
@@ -78,14 +80,16 @@ interface Node {
   verts: number;            // 顶点数（所有 primitives 总和）
   tris: number;             // 三角面数（indices / 3 或 POSITION / 3）
   attrs: string;            // 顶点属性列表，如 "POSITION NORMAL TEXCOORD_0"
-  T: number[];              // translation [x, y, z]，单位米
-  Rdeg: number[];           // rotation 转欧拉角 [x°, y°, z°]
-  S: number[];              // scale [x, y, z]
+  mats: number[];           // 该节点（所有 primitives）引用的材质索引，去重升序
+  T: number[];              // translation [x, y, z]，世界空间，单位米
+  Rdeg: number[];           // rotation 转欧拉角 [x°, y°, z°]，世界空间
+  S: number[];              // scale [x, y, z]，世界空间
 }
 ```
 
 **字段说明**：
-- `T/Rdeg/S`：若节点有 `matrix`，则分解；否则直接读 `translation/rotation/scale`
+- `mats`：来自 `mesh.primitives[].material` 去重集合。CAD 类导出常见一个 mesh 挂多个 primitive、每个 primitive 各自绑定一个材质 ID（3ds Max 的 Multi/Sub-Object 材质拆分即是如此），此字段就是「材质编号」在节点层面的呈现
+- `T/Rdeg/S`：**世界空间**变换——沿父链（`parentOf`）累乘所有祖先节点的 local matrix 后再分解。glTF 场景图常见「网格节点 + 无名父级壳」结构（网格节点自身 matrix 可能只是占位单位缩放，真实摆位烘焙在上一层父节点），若只读节点自身 local matrix，对这类文件会得到恒等/无意义的 TRS；v0.1.1 起改为世界空间以修正此问题
 - `Rdeg`：四元数转 XYZ 欧拉角（弧度→度），便于人类阅读
 - `attrs`：POSITION / NORMAL / TEXCOORD_0 / COLOR_0 / TANGENT / JOINTS_0 / WEIGHTS_0 等
 
