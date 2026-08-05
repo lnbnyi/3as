@@ -48,7 +48,7 @@
 - 安全：HTML 转义防 XSS，不发送任何外网请求
 
 ### 文档
-- `README.md`：快速开始、四张表说明、与 huagao3d 集成说明、FAQ
+- `README.md`：快速开始、四张表说明、与 Chengduhuagao 案例的关系说明、FAQ
 - `SPEC.md`：数据结构规范、扩展支持矩阵、查看器集成代码示例、Phase 2-5 路线图
 - `CHANGELOG.md`：本文档
 

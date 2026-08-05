@@ -1,0 +1,5 @@
+# 除 Chengduhuagao 案例样品外，其他 GLB 默认视为 WIP / 客户在监修状态，不上传 GitHub。
+# 需要本地测试时把文件放进 glb/ 目录即可，此规则会自动排除，不会被 git add 进来。
+glb/*
+!glb/chengdu-huagao-0801.glb
+!glb/.gitkeep

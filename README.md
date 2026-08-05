@@ -129,7 +129,7 @@ python3 -m http.server 8000
 - **扩展使用 / 扩展必需**：glTF extensionsUsed / extensionsRequired
 - **动画 / 蒙皮**：动画片段数 / 骨骼蒙皮数
 - **默认相机**：查看器推荐的相机位置（根据包围盒计算）
-- **光照 / 边缘框**：查看器默认配置（huagao3d 约定）
+- **光照 / 边缘框**：查看器默认配置（沿用 chengdu-huagao 案例的默认值，非外部产品约定）
 
 **整档备注**：文本框，项目级说明（如"成都花稿 L6 2024-08-01 终稿"）
 
@@ -190,7 +190,7 @@ python3 -m http.server 8000
 ```
 
 **用途**：
-- 交付给查看器（如 huagao3d），读取 `annotations.nodes` 配置默认显隐/编辑权限
+- 交付给查看/编辑场景（目前是 chengdu-huagao 案例，未来是 3AS 自身的查看模式），读取 `annotations.nodes` 配置默认显隐/编辑权限
 - 项目文档归档
 - 版本控制（与 GLB 一起存储）
 
@@ -223,7 +223,7 @@ python3 -m http.server 8000
 ### 技术栈
 
 - **纯前端**：单 HTML 文件，ES 模块，无构建步骤
-- **three.js 0.166.1**：复用 huagao3d/3ds-viewer 的 `vendor/` 目录
+- **three.js 0.166.1**：复用 `3ds-viewer`（chengdu-huagao 案例）的 `vendor/` 目录
 - **importmap**：静态映射 three.js 模块路径
 - **localStorage**：注释持久化，无需服务端
 
@@ -237,10 +237,15 @@ python3 -m http.server 8000
 │   ├── loaders/GLTFLoader.js
 │   ├── controls/OrbitControls.js
 │   └── utils/...
+├── glb/                # 本地测试样品（见下方 GLB 上传政策），大部分被 .gitignore 排除
 ├── README.md           # 本文档
 ├── SPEC.md             # 数据结构与扩展规范
 └── CHANGELOG.md        # 版本历史
 ```
+
+### GLB 上传政策
+
+仓库是公开的，但 GLB 模型文件默认**不算公开可分享**——除 Chengduhuagao 案例（`chengdu-huagao-0801.glb`）外，`glb/` 目录下的其他模型默认视为 WIP / 客户监修状态，`.gitignore` 已排除，不会被 `git add` 进来。本地测试随便放文件进 `glb/` 没问题；如果确实需要把某个新样品提交进仓库共享，先跟负责人确认这份模型是否已经可以公开。HTML/CSS/JS 代码文件没有这个限制，正常提交。
 
 ### 未来扩展路径
 
@@ -264,25 +269,21 @@ python3 -m http.server 8000
 
 ---
 
-## 与 huagao3d/3ds-viewer 的关系
+## 与 Chengduhuagao 案例（3ds-viewer）的关系
 
-**3AS** 是独立应用，但设计上与 huagao3d 查看器配套：
+> 命名统一用拼音 **Chengduhuagao**（对应文件名 `chengdu-huagao-0801.glb`）。之前文档里出现的「huagao3d」是不准确的叫法——它暗示这是一个独立的查看器产品，实际不是，见下文。
 
-| 项 | 3AS | huagao3d |
+**Chengduhuagao / `3ds-viewer` 目前只是一个不带通用加载功能的固定案例**：`main.js` 里 `MODEL_URL` 硬编码指向 `chengdu-huagao-0801.glb`，没有拖拽/上传任意 GLB 的能力，配合 `save.php`/`mods.php` 验证了「查看 + 编辑 + 方案保存」这一段体验，但只能用于这一个模型，**不是一个独立的通用查看器产品**。
+
+**未来方向**：等这套「查看 + 编辑 + 保存」体验补上通用 GLB 加载能力，就应该**完全并入 3AS**，作为 3AS 自己的「查看/编辑模式」，而不是维持成两个各自独立、靠 JSON 交接的项目。3AS 的目标形态是覆盖「预处理注释 → 查看编辑 → 方案保存」全流程的单一系统；Chengduhuagao 只是验证查看/编辑体验的参考案例，UI 交互和数据结构可以复用，但不会作为独立产品线继续存在。
+
+**现状 vs 目标形态**：
+| 阶段 | 现状 | 目标（并入 3AS 后）|
 |---|---|---|
-| 定位 | 预处理 + 注释 | 查看 + 编辑 + 方案保存 |
-| 输入 | 原始 GLB | GLB + 3AS 注释 JSON |
-| 输出 | 注释 JSON | 用户方案 JSON |
-| 用户 | 模型准备者 / 技术美术 | 最终用户 / 客户 |
-| 运行时机 | 项目初始化 | 生产环境 |
+| 预处理 + 注释 | 3AS 已实现（本项目） | 3AS 的第一段模式，不变 |
+| 查看 + 编辑 + 方案保存 | Chengduhuagao 案例硬编码单一模型，`3ds-viewer/` 独立代码 | 3AS 内置的第二段模式，加载任意 GLB + 对应 3AS 注释 JSON |
 
-**工作流**：
-1. 技术美术用 3AS 预处理 GLB，标记默认显隐、节点别名、材质说明
-2. 导出 `model.3as.json`
-3. 开发者读取 JSON，配置 huagao3d 初始状态（`origTransforms`、`working`、部件面板显示名）
-4. 最终用户在 huagao3d 中编辑、保存方案
-
-**数据映射示例**：
+**数据消费方式**（Chengduhuagao 案例现有代码里的写法，并入 3AS 后接口不变）：
 ```js
 // 3AS 注释
 {
@@ -295,7 +296,7 @@ python3 -m http.server 8000
   }
 }
 
-// huagao3d 消费
+// 查看/编辑模式消费（现阶段是 Chengduhuagao 案例代码，未来直接是 3AS 自己）
 const anno = await fetch('model.3as.json').then(r => r.json());
 model.children.forEach(part => {
   const a = anno.annotations.nodes[part.name];

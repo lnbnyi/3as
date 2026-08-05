@@ -457,7 +457,7 @@ $('fileInput').onchange = async (e) => {
 };
 $('sampleBtn').onclick = async () => {
   status('下载示例模型…');
-  const paths = ['../huagao3d/chengdu-huagao-0801.glb', '../3ds-viewer/chengdu-huagao-0801.glb', './chengdu-huagao-0801.glb'];
+  const paths = ['../3ds-viewer/chengdu-huagao-0801.glb', './glb/chengdu-huagao-0801.glb', './chengdu-huagao-0801.glb'];
   for (const p of paths) {
     try {
       const r = await fetch(p);
