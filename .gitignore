@@ -3,3 +3,12 @@
 glb/*
 !glb/chengdu-huagao-0801.glb
 !glb/.gitkeep
+
+# 开发/测试过程中的临时产物（测试脚本、截图、合成样品 GLB）——不是文档，不进仓库。
+# 见 Doc/INDEX.md「开发测试产物放 _dev/」。
+_dev/
+
+# 3AS 后端运行时生成的用户上传项目数据（GLB + 注释 JSON + owner token 哈希），
+# 跟 glb/* 同一条政策：真实用户数据不上传 GitHub。
+server/projects/*
+!server/projects/.gitkeep

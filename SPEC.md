@@ -43,11 +43,13 @@ interface Material {
 ```
 
 **字段说明**：
-- `baseColorF`：原始 glTF `pbrMetallicRoughness.baseColorFactor`（若缺省为 `[1,1,1]`）
+- `baseColorF`：glTF `pbrMetallicRoughness.baseColorFactor`（若缺省为 `[1,1,1]`）
 - `emStr`：来自 `KHR_materials_emissive_strength.emissiveStrength`，标准值 1.0，扩展可 > 1
 - `spec`：来自 `KHR_materials_specular.specularFactor`，仅当扩展存在时有值
 - `tex`：人类可读的贴图槽摘要，格式 `<槽名>:<图片名>`，多个槽用空格分隔
 - `usedByNodes`：从 `nodes[].mats` 反向聚合得到，用于在无贴图/材质名统一为 "fallback Material" 的 CAD 类导出（如 3ds Max ATF 导出）中定位材质对应的实际部件
+
+**可编辑性（2026-08-05 起，材质编辑器上线；alphaMode/doubleSided 见 #18；贴图槽见 #16）**：这份 `Material` 接口本身没有新增字段——`baseColor`/`baseColorF`/`metal`/`rough`/`emissive`/`emStr`/`alpha`/`ds`/`tex` 现在全部是**运行时可变**的：材质编辑器（右侧「材质」Tab 的色块画廊 + 详情区）改动这些字段后，会同步写回 ① `gltf.parser.json`（内存变量 `raw`，也就是这份表格构建时读的原始数据结构）；② `matInstances`（材质索引 → 实际渲染用的 `THREE.Material` 实例集合，来自 `gltf.parser.associations` 反查，处理了 GLTFLoader 为顶点色/平滑法线等场景 clone 出材质变体的情况）。导出 `.3as.json`（`exportBtn`）时这几个字段反映的是**当前编辑后的值**，不是加载时的原始值；「另存为 GLB」的 `GLTFExporter` 序列化的是被同步过的 three.js 场景，`materials[i].pbrMetallicRoughness.baseColorFactor` 等字段在导出的 GLB 里同样是编辑后的新值。每个材质加载时会拍一份深拷贝快照（`tables.matOriginal`，不在导出 JSON 里）供「还原到原始值」用，不受会话内编辑次数影响。`alpha`（`OPAQUE`/`MASK`/`BLEND` 下拉框）/`ds`（双面开关）编辑规则照抄 `GLTFLoader.createMaterial()` 反向映射；`tex` 字段的变化来自贴图槽的上传/替换/移除操作（详见 §2.1 `KHR_texture_transform` 一行下方、README.md 表1「贴图槽编辑区」）——上传/替换会让 `tex` 摘要多出/换掉对应槽位那一段，移除会去掉。`usedByNodes` 仍是纯只读派生字段，编辑器不改它（由 `nodes[].mats` 反向聚合，不受材质编辑影响）。
 
 ---
 
@@ -65,8 +67,11 @@ interface Texture {
 ```
 
 **字段说明**：
-- `dims`：异步解码得出，导出时若仍为 `"…"` 表示解码未完成
+- `dims`：原始 GLB 内嵌的贴图异步解码得出，导出时若仍为 `"…"` 表示解码未完成；本工具上传的贴图（见下）上传时就已经同步拿到尺寸，不会停留在 `"…"` 态
+- `bytes`：原始 GLB 内嵌贴图来自 `bufferView.byteLength`；本工具上传的贴图来自 `File.size`（原始文件字节数，不是重新编码后的大小）
 - `used`：反向关联，便于识别未使用贴图（值为 `"—"` 时表示无材质引用）
+
+**贴图上传/替换/移除（2026-08-05 起，#16）**：这份 `Texture` 接口本身没有新增字段——材质详情编辑区的贴图槽上传/替换操作会往 `raw.images[]`/`raw.textures[]` 追加新记录（`raw.images[i]` 多出内部字段 `_local: true`/`_dims`/`_bytes` 标记这是本工具上传、非原始 GLB 内嵌的图片，`Texture` 表渲染时读 `_dims`/`_bytes` 而不是走 `bufferView` 异步解码这条路径；这几个 `_` 前缀字段不出现在导出的 `.3as.json` 里，纯内部簿记用）；`raw.images[i].uri` 存一份 `FileReader.readAsDataURL()` 读出的原始文件 data URI，供 3AS 自己的表格/预览一致性用，**不是**导出正确性依赖的数据（`GLTFExporter` 序列化贴图读的是 three.js `Texture.image`，不读这份 `uri`）。移除贴图只清空材质槽位引用，不删除 `raw.images`/`raw.textures` 里已有的条目（可能被其它槽位共享，也避免删除引发的索引重排）。
 
 ---
 
@@ -76,11 +81,14 @@ interface Texture {
 interface Node {
   ni: number;               // 节点索引（glTF nodes 数组）
   name: string;             // 节点名称
-  parent: string;           // 父节点名称或 "—"
-  verts: number;            // 顶点数（所有 primitives 总和）
-  tris: number;             // 三角面数（indices / 3 或 POSITION / 3）
-  attrs: string;            // 顶点属性列表，如 "POSITION NORMAL TEXCOORD_0"
-  mats: number[];           // 该节点（所有 primitives）引用的材质索引，去重升序
+  pni: number | null;       // 父节点索引（glTF nodes 数组），根节点为 null
+  parent: string;           // 父节点名称或 "—"（顶层节点）
+  children: number[];       // 直接子节点索引数组（来自 glTF node.children），叶子节点为 []
+  hasMesh: boolean;         // 是否为网格节点（false = 纯分组/变换容器节点，无 mesh）
+  verts: number;            // 顶点数（所有 primitives 总和）；分组节点（hasMesh=false）恒为 0
+  tris: number;             // 三角面数（indices / 3 或 POSITION / 3）；分组节点恒为 0
+  attrs: string;            // 顶点属性列表，如 "POSITION NORMAL TEXCOORD_0"；分组节点为 ""
+  mats: number[];           // 该节点（所有 primitives）引用的材质索引，去重升序；分组节点为 []
   T: number[];              // translation [x, y, z]，世界空间，单位米
   Rdeg: number[];           // rotation 转欧拉角 [x°, y°, z°]，世界空间
   S: number[];              // scale [x, y, z]，世界空间
@@ -88,10 +96,17 @@ interface Node {
 ```
 
 **字段说明**：
+- **从 Alpha 0.001a 起，`nodes` 数组包含 glTF `nodes` 里的全部节点，不再过滤纯分组节点**（无 `mesh`、只有 `children` 的变换容器节点）。之前版本用 `.filter(n.mesh !== undefined)` 把这类节点从表里剔除，README 曾写「仅显示含 mesh 的节点」，现已去掉这条限制——glTF 原生就用「没有 mesh 属性、只有 children 的 node」表达分组，详见 `Doc/EDITOR-SPEC.md` §1
+- `hasMesh`：区分叶子网格节点（true）与纯分组节点（false）。**分组节点没有 primitives，所以 `verts`/`tris` 恒为 `0`、`attrs` 恒为 `""`、`mats` 恒为 `[]`**——这三/四个字段的类型没变（依然是 `number`/`string`/`number[]`，不会出现 `null`/`undefined`/`'—'` 这种越界值），消费端用 `hasMesh` 判断该不该展示这些字段，而不是靠字段本身是否为空值判断
+- `pni`/`children`：新增字段，用节点索引直接表达树结构（`pni` 指向父节点索引，`children` 指向直接子节点索引数组），用于重建层级/渲染树状 UI；`parent`（父节点**名称**字符串）字段保留不变，向后兼容旧消费端
 - `mats`：来自 `mesh.primitives[].material` 去重集合。CAD 类导出常见一个 mesh 挂多个 primitive、每个 primitive 各自绑定一个材质 ID（3ds Max 的 Multi/Sub-Object 材质拆分即是如此），此字段就是「材质编号」在节点层面的呈现
-- `T/Rdeg/S`：**世界空间**变换——沿父链（`parentOf`）累乘所有祖先节点的 local matrix 后再分解。glTF 场景图常见「网格节点 + 无名父级壳」结构（网格节点自身 matrix 可能只是占位单位缩放，真实摆位烘焙在上一层父节点），若只读节点自身 local matrix，对这类文件会得到恒等/无意义的 TRS；v0.1.1 起改为世界空间以修正此问题
+- `T/Rdeg/S`：**世界空间**变换——沿父链（`parentOf`）累乘所有祖先节点的 local matrix 后再分解。glTF 场景图常见「网格节点 + 无名父级壳」结构（网格节点自身 matrix 可能只是占位单位缩放，真实摆位烘焙在上一层父节点），若只读节点自身 local matrix，对这类文件会得到恒等/无意义的 TRS；v0.1.1 起改为世界空间以修正此问题。分组节点同样有意义——它是子树共享的变换基，算法不变
 - `Rdeg`：四元数转 XYZ 欧拉角（弧度→度），便于人类阅读
 - `attrs`：POSITION / NORMAL / TEXCOORD_0 / COLOR_0 / TANGENT / JOINTS_0 / WEIGHTS_0 等
+
+**创建 Instance（2026-08-05 起）**：`Node` 接口本身没有新增字段——一个 Instance 就是一条普通的 `Node` 记录，`mesh` 引用（体现在 `hasMesh`/`mats`/`verts`/`tris` 这些字段上）跟原节点指向同一份底层 mesh 数据，`ni` 是新分配的索引，`name` 是原名加 `_instanceN` 后缀（避免跟 `nodeAnno` 的按名存储机制撞名）。写入链路：① `raw.nodes[]`（`gltf.parser.json`）新增节点记录，正确接入 `raw.scenes[i].nodes` 或父节点 `children[]`；② three.js 场景图（`model`）里新增对应的 `Object3D`/`Mesh`/`Group`，`geometry`/`material` 复用原节点引用的对象（不 clone 顶点/材质数据）。`rebuildNodeTable()`（从 `buildTables()` 拆出来的独立函数，只依赖 `raw`）负责创建后重算这张表。分组节点创建 Instance 时，子树里的每一层都会各自生成一条新的 `Node` 记录（保留原子树的层级粒度，不拍平成单个节点），详见 `Doc/EDITOR-SPEC.md` §6 实现记录。
+
+**导出选中物体**：跟这份 JSON 表格无关的另一条导出路径——不是 `exportBtn`（导出注释 JSON）也不是「另存为 GLB」下拉菜单里的全量导出（`exportGlbBlob()`，Doc/TODO.md #21 起从原来的 `exportGlbBtn` 单一按钮重构成下拉菜单，核心打包逻辑抽成这个共用函数），是节点树每行的「⇩ 导出」按钮，直接把该节点对应的 `THREE.Object3D` 传给 `GLTFExporter.parse()`，产出一份只含这个子树依赖（mesh/material/贴图/accessor）的独立 `.glb` 文件，不产出 JSON。
 
 ---
 
@@ -133,6 +148,33 @@ interface Annotations {
   matNotes: Record<string, string>;       // 材质备注，键为材质索引字符串
   texNotes: Record<string, string>;       // 贴图备注，键为图片索引字符串
   sceneNote: string;        // 整档备注
+  sceneBbox?: SceneBboxOverride;  // 场景整体包围盒手动覆盖（Doc/TODO.md #9），不存在或 manual=false 时查看器/导出用自动计算值
+  basepoints?: MeasurementBasepoint[];  // 测量基点列表（Doc/TODO.md #10），见 Doc/EDITOR-VIEWER-CONTRACT.md 第五节，允许多个（如不同楼层各自的基点）
+  script?: ScriptEntry[];   // 操作脚本（Doc/TODO.md #13），按发生顺序追加的编辑动作记录，供「场景 ▾ → 模型 →
+                             // 重放操作脚本」使用；查看器端不需要读这个字段（纯 3AS editor 内部机制），
+                             // 见 Doc/EDITOR-SPEC.md §10
+}
+
+interface ScriptEntry {
+  op: string;                // 操作类型：'editMaterial' | 'setUvTransform' | 'setNodeTransform' |
+                              // 'createInstance' | 'uploadTexture' | 'removeTexture' | 'cleanupBatch' |
+                              // 'reparentNode'（2026-08-06 Doc/TODO.md #29 新增，拖拽重新挂靠父节点）
+  target: ScriptTarget | null;  // null 仅用于 cleanupBatch（全局批量操作，没有单一目标）
+  params: Record<string, any>;  // 每种 op 各自的参数，字段随 op 变化，见 Doc/EDITOR-SPEC.md §10 表格；
+                              // 'reparentNode' 的 params 额外带 { newParentName, newParentAtIndex }——
+                              // 新父节点不是 ScriptTarget（target 字段记的是被拖节点本身），只是这次
+                              // 操作的一个参数，解析方式跟 target.atIndex 同一套「hintIndex 优先，
+                              // 找不到再按名字找第一个」策略，见 Doc/EDITOR-SPEC.md §16
+  ts: number;                // 记录时间戳（毫秒）
+}
+
+interface ScriptTarget {
+  byName: string;            // 按名字匹配——节点用 raw.nodes[].name（缺省 fallback 'node_'+索引），
+                              // 材质用 raw.materials[].name（缺省 fallback '材质 #'+索引）
+  kind: 'node' | 'material';
+  atIndex?: number;          // 记录那一刻目标所在的索引，仅当「同名候选之间的优先提示」用，不是主键——
+                              // 见 Doc/EDITOR-SPEC.md §10 关于同名材质（真实样品所有材质原始都叫
+                              // "fallback Material"）场景下如何避免误判的说明
 }
 
 interface NodeAnnotation {
@@ -140,6 +182,30 @@ interface NodeAnnotation {
   allowEdit: boolean;       // 是否允许用户编辑
   alias: string;            // 别名（查看器 UI 显示名）
   note: string;             // 备注说明
+  bbox?: BoundingBoxAnnotation;  // 测量包围盒（OBB），见 Doc/EDITOR-VIEWER-CONTRACT.md 第六节，字段定义在那份契约文档
+  basepointRef?: string;    // 关联的测量基点名字（对应 Annotations.basepoints[].name），不存在/空值＝不关联，
+                             // 3AS editor 端约定不关联时相对测量数值 fallback 到 basepoints[0]（"场景默认基点"），
+                             // 见 Doc/EDITOR-VIEWER-CONTRACT.md 第五节
+  atomicGroup?: boolean;    // 【2026-08-06 新增，Doc/TODO.md #29】组锁定：true = 这个节点在 viewer 里必须
+                             // 整体选中/整体移动，不能选中/操作它的某个子节点；默认 false（不存在也视为 false）。
+                             // editor 自己内部预处理/标注时不受这条限制，只约束 viewer 端最终用户能操作到什么
+                             // 粒度。editor 端 UI 落地成节点表「允许选中」勾选框——勾选＝atomicGroup:false，
+                             // 取消勾选＝atomicGroup:true，语义互为反面，字段名和真实含义见
+                             // Doc/EDITOR-VIEWER-CONTRACT.md 第三节「组锁定」+ 第七节「待确认」第 1 条回填
+}
+
+interface SceneBboxOverride {
+  manual: boolean;                          // true=场景表显示/导出下面的 size/center；false=显示/导出自动计算值，size/center 仍保留（关闭手动开关不清空，方便下次重新打开时不是从 0 开始）
+  size: [number, number, number];           // 手动指定的场景整体包围盒尺寸（米）
+  center: [number, number, number];         // 手动指定的场景整体包围盒中心（米）
+}
+
+interface MeasurementBasepoint {
+  name: string;              // 基点名字，同一份注释里唯一（节点 basepointRef 靠这个字符串识别关联的是哪个基点）
+  position: [number, number, number];  // 基点世界坐标（米），跟 BoundingBoxAnnotation.center/SceneBboxOverride.center 同一套坐标系
+  zRotation: number;          // 基点朝向（度）——只绕本场景竖直轴的方位角，不是完整三轴旋转，
+                               // 对应建筑测量里的"方位角"概念；字段名沿用既有措辞，具体绕哪根轴见
+                               // Doc/EDITOR-VIEWER-CONTRACT.md 第五节的实现回填说明
 }
 ```
 
@@ -148,6 +214,9 @@ interface NodeAnnotation {
 - `visible/allowEdit`：查看器初始化时读取，控制默认行为
 - `alias`：优先级高于 glTF 原始 `name`，用于 UI 显示
 - `matNotes/texNotes`：键是索引的**字符串形式**（JSON 对象键必须是字符串）
+- `bbox`/`sceneBbox`：导出的 `scene['包围盒尺寸']`/`scene['默认中心点']` 两个展示字符串字段（mm，`SPEC.md` 场景表小节）始终反映当前生效值（自动或手动），查看器直接读这两个字符串就够，不需要自己判断 `sceneBbox.manual` 再挑源头
+- `basepoints`/`basepointRef`：测量基点系统（Doc/TODO.md #10），GLB 原生约定探测规则、坐标系取舍、`zRotation` 具体绕哪根轴，都在 Doc/EDITOR-VIEWER-CONTRACT.md 第五节
+- `script`：操作脚本记录 + 重放系统（Doc/TODO.md #13），纯 3AS editor 内部机制，查看器端可以忽略这个字段（不影响渲染/交互），完整设计和实现记录见 Doc/EDITOR-SPEC.md §10
 
 ---
 
@@ -159,9 +228,11 @@ interface NodeAnnotation {
 |-------|------|------|------|
 | `KHR_materials_specular` | 材质 | `specularFactor` | 高光强度，0-1 |
 | `KHR_materials_emissive_strength` | 材质 | `emissiveStrength` | 自发光倍数，默认 1.0 |
+| `KHR_texture_transform` | 材质·贴图槽 | `offset`/`scale`/`rotation` | 贴图 UV 移动/缩放/旋转。挂在「某材质的某贴图槽」这一层（如 `pbrMetallicRoughness.baseColorTexture.extensions.KHR_texture_transform`），不是贴图本身的属性——同一张贴图被不同材质/不同槽位引用时可以有各自独立的变换。读写完全交给 three.js `GLTFLoader`/`GLTFExporter`（映射到 `THREE.Texture.offset`/`.repeat`/`.rotation`/`.center`），3AS 不自己解析这段扩展 JSON，只做 UI + 属性读写 |
 
 **消费方式**：
 - 材质表直接展示 `spec` 和 `emStr` 字段
+- 材质详情编辑区「贴图 UV 变换」分区：按材质+贴图槽分组，每组可编辑移动 X/Y、缩放 X/Y、旋转角，见 README.md 表1
 - 查看器需支持这些扩展才能正确渲染
 
 ### 2.2 已识别但未解析扩展
