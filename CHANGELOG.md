@@ -2,6 +2,14 @@
 
 ---
 
+## Alpha 0.001a (2026-08-05) — 版本号规范切换 + Editor Mode 设计立项
+
+**版本号规范变更**：从 SemVer（v0.1.x）切换为 `Alpha 0.0XXa` 序列，反映项目仍处于早期未定型阶段。之前的 v0.1.0/v0.1.1 历史条目保留不改，作为该规范切换前的记录。
+
+**Editor Mode 设计立项**：整理了 GLB 编辑/另存为、材质清理工具、层级/组/Instance、材质与 UV 编辑器、测量包围盒、测量基点系统、操作脚本重放等一整套「查看/编辑模式」需求，写入 [`Doc/EDITOR-SPEC.md`](./Doc/EDITOR-SPEC.md)（详见 [`Doc/INDEX.md`](./Doc/INDEX.md) 的文档组织规范）。这是「Chengduhuagao 案例未来并入 3AS 查看/编辑模式」这个方向确立后的具体规格——本次只整理设计与 todo，未开始实现。
+
+---
+
 ## v0.1.1 (2026-08-04) — 真实样品验证修复
 
 用 3ds Max（Autodesk ATF → GLTFConsumer）导出的真实 GLB（`glb/0A_JIMMYCHOO_CD260804.glb`，17 材质全部 `fallback Material`、0 贴图、部分 mesh 多 primitive 多材质 ID）实测后发现并修复：
