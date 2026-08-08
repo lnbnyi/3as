@@ -10,6 +10,7 @@
 | `EDITOR-SPEC.md` | Editor Mode（查看/编辑模式）设计草案 | 持续修订，不是一次性记录 |
 | `TODO.md` | 对应 EDITOR-SPEC.md 的实现进度清单 | 做完一项勾一项，和 harness 内部的 TaskList 保持同步 |
 | `BACKEND-SPEC.md` | 自建 PHP 后端设计草案（GLB 上传/多项目/版本历史），对照 3ds-viewer 现有 save.php/mods.php 基线定的范围 | 持续修订，不是一次性记录 |
+| `DEPLOY.md` | 部署指南——纯静态方案 A / 静态+PHP后端方案 B，环境要求/目录结构/Nginx-Apache配置示例/部署后验证清单/安全说明/更新与回滚 | 持续修订，不是一次性记录 |
 | `EDITOR-VIEWER-CONTRACT.md` | editor(3AS)/viewer(3ds-viewer演化) 两页面架构的数据契约——两层数据模型、组锁定(atomicGroup)、版本号、测量基点优先级、包围盒同步 | 持续修订，不是一次性记录 |
 | `2026-08-05-viewer-capability-mobile-comparison.md` | Babylon.js/model-viewer/Sketchfab 能力与手机端开销细化对比（延伸 EDITOR-SPEC.md 第 12 节） | 一次性记录，不追加修订 |
 | `2026-08-05-glb-topology-question.md` | GLB 是否保留贴图之外的拓扑信息、重新拓扑代价调研 | 一次性记录，不追加修订 |
