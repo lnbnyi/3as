@@ -150,28 +150,51 @@ interface Annotations {
   sceneNote: string;        // 整档备注
   sceneBbox?: SceneBboxOverride;  // 场景整体包围盒手动覆盖（Doc/TODO.md #9），不存在或 manual=false 时查看器/导出用自动计算值
   basepoints?: MeasurementBasepoint[];  // 测量基点列表（Doc/TODO.md #10），见 Doc/EDITOR-VIEWER-CONTRACT.md 第五节，允许多个（如不同楼层各自的基点）
+  defaultBasepointName?: string | null;  // 【2026-08-07 新增，Doc/TODO.md #37】用户手动指定的「默认基点」名字（对应
+                             // basepoints[].name）。null/不存在＝没有手动指定，没关联具体基点的节点走原有的
+                             // GLB 原生 Origin 节点/包围盒中心那套自动优先级兜底（basepoints[0]，规则见
+                             // Doc/EDITOR-VIEWER-CONTRACT.md 第五节）；有值时这个值覆盖掉自动规则，用户有最终
+                             // 决定权（哪怕场景里确实有 Origin 节点探测出来的基点，手动指定的也会盖过它）。
+                             // 完整解析逻辑（含"GLB 原生 Origin 节点又被手动指定成别的默认基点"这种边界情况
+                             // 怎么判断）见 Doc/EDITOR-SPEC.md §8 2026-08-07 实现记录。
   script?: ScriptEntry[];   // 操作脚本（Doc/TODO.md #13），按发生顺序追加的编辑动作记录，供「场景 ▾ → 模型 →
                              // 重放操作脚本」使用；查看器端不需要读这个字段（纯 3AS editor 内部机制），
                              // 见 Doc/EDITOR-SPEC.md §10
+  cameraViews?: CameraView[];  // 【2026-08-08 新增，Doc/TODO.md #43】相机视角书签列表，每个模型各自一份
+                             // （跟 basepoints 同一个存储层级），供视口左上角「相机视角」卷展栏增删改查，
+                             // 见 Doc/EDITOR-SPEC.md §21.2
 }
 
 interface ScriptEntry {
   op: string;                // 操作类型：'editMaterial' | 'setUvTransform' | 'setNodeTransform' |
                               // 'createInstance' | 'uploadTexture' | 'removeTexture' | 'cleanupBatch' |
-                              // 'reparentNode'（2026-08-06 Doc/TODO.md #29 新增，拖拽重新挂靠父节点）
-  target: ScriptTarget | null;  // null 仅用于 cleanupBatch（全局批量操作，没有单一目标）
+                              // 'reparentNode'（2026-08-06 Doc/TODO.md #29 新增，拖拽重新挂靠父节点）|
+                              // 'addBasepoint' | 'addAutoBasepoint' | 'deleteBasepoint' | 'renameBasepoint' |
+                              // 'setBasepointPos' | 'setBasepointRot' | 'setDefaultBasepoint' |
+                              // 'clearDefaultBasepoint'（2026-08-07 Doc/TODO.md #37 新增八种，基点新增/生成/
+                              // 删除/改名/编辑位置朝向/设默认/取消默认，见 Doc/EDITOR-SPEC.md §8）
+  target: ScriptTarget | null;  // null 用于 cleanupBatch/addBasepoint/addAutoBasepoint/clearDefaultBasepoint
+                              // （没有单一既有目标——addBasepoint 系是"创建新的"，参数在 params 里；
+                              // clearDefaultBasepoint 是清空一个全局状态，不针对某个基点）
   params: Record<string, any>;  // 每种 op 各自的参数，字段随 op 变化，见 Doc/EDITOR-SPEC.md §10 表格；
                               // 'reparentNode' 的 params 额外带 { newParentName, newParentAtIndex }——
                               // 新父节点不是 ScriptTarget（target 字段记的是被拖节点本身），只是这次
                               // 操作的一个参数，解析方式跟 target.atIndex 同一套「hintIndex 优先，
-                              // 找不到再按名字找第一个」策略，见 Doc/EDITOR-SPEC.md §16
+                              // 找不到再按名字找第一个」策略，见 Doc/EDITOR-SPEC.md §16；
+                              // 'addBasepoint' 的 params 是 { position, zRotation, namePrefix, source,
+                              // associateNodeTarget? }（associateNodeTarget 只有中心点面板「以当前节点位置
+                              // 新建基点」这个入口会带，重放时顺带把新基点关联回该节点）；'renameBasepoint'
+                              // 是 { newName }；'setBasepointPos' 是 { axis, value }；'setBasepointRot'/
+                              // 'setDefaultBasepoint' 是 { value }/{}；'clearDefaultBasepoint' 是 { prevName }
+                              // （prevName 纯日志用途，重放不依赖它）
   ts: number;                // 记录时间戳（毫秒）
 }
 
 interface ScriptTarget {
   byName: string;            // 按名字匹配——节点用 raw.nodes[].name（缺省 fallback 'node_'+索引），
-                              // 材质用 raw.materials[].name（缺省 fallback '材质 #'+索引）
-  kind: 'node' | 'material';
+                              // 材质用 raw.materials[].name（缺省 fallback '材质 #'+索引），
+                              // 基点用 anno.basepoints[].name（2026-08-07 Doc/TODO.md #37 新增第三种 kind）
+  kind: 'node' | 'material' | 'basepoint';
   atIndex?: number;          // 记录那一刻目标所在的索引，仅当「同名候选之间的优先提示」用，不是主键——
                               // 见 Doc/EDITOR-SPEC.md §10 关于同名材质（真实样品所有材质原始都叫
                               // "fallback Material"）场景下如何避免误判的说明
@@ -206,6 +229,48 @@ interface MeasurementBasepoint {
   zRotation: number;          // 基点朝向（度）——只绕本场景竖直轴的方位角，不是完整三轴旋转，
                                // 对应建筑测量里的"方位角"概念；字段名沿用既有措辞，具体绕哪根轴见
                                // Doc/EDITOR-VIEWER-CONTRACT.md 第五节的实现回填说明
+  source?: { kind: 'auto' | 'manual', priority?: 1 | 2, detail?: string };  // 【2026-08-06 Doc/TODO.md #30】
+                               // 这个基点自己是怎么产生的（不是"它是不是当前默认"，两者分开，见下面
+                               // resolvedReason 的说明）：kind==='auto' 是 computeDefaultBasepoint() 按
+                               // GLB 原生约定探测出来的（priority 1=命中 Origin 节点，2=退化用包围盒中心），
+                               // kind==='manual' 是用户手动新增的。纯展示/调试元数据，不参与坐标计算，
+                               // editor 内部字段，2026-08-06 #30 完成时判断不需要写进这份 SPEC.md 契约
+                               // （只有 editor 端 UI 读它），这次 #37 文档梳理时补记录进来，字段行为本身
+                               // 没有变化。
+  resolvedReason?: string;    // 【2026-08-07 Doc/TODO.md #37 新增，只读，只出现在导出的注释 JSON 里，
+                               // 不是 editor 运行时 anno.basepoints[] 内存对象的常驻字段——导出时
+                               // （buildExportJson()）现算现拼一份浅拷贝加上去，不持久化进 localStorage，
+                               // 避免"存量字段是不是过期了"的问题】人类可读地说明"这个基点当前是不是
+                               // 全局默认基点、如果是，靠哪条规则生效"：
+                               //   · "GLB原生Origin节点" —— 当前默认基点，且没有用户手动指定覆盖，
+                               //      是靠场景里 Origin/_origin/origin 命名节点探测出来的（对应
+                               //      basepoints[0].source.priority===1）
+                               //   · "场景包围盒中心（兜底）" —— 当前默认基点，没有手动指定覆盖，命中
+                               //      优先级 2 兜底（包围盒中心），或者是旧注释 JSON 里没有 source 字段
+                               //      的历史数据（无法证明是靠 Origin 节点探测的，保守归到这一类，不
+                               //      编造虚假的"命中 Origin"结论）
+                               //   · "用户手动指定为默认" —— Annotations.defaultBasepointName 精确等于
+                               //      这个基点的名字（用户在下拉菜单里选过「设为默认基点」）
+                               //   · "非当前默认基点" —— 除上面三种之外的全部其它基点（场景允许多个
+                               //      基点，全局默认只有一个，其余的都落进这一类；即使这个基点自己的
+                               //      source.priority===1，只要它不是当前生效的默认，也不会标"GLB原生
+                               //      Origin节点"——这是决策记录"用户有最终决定权"在数据层面的体现，
+                               //      判断逻辑/边界情况详见 Doc/EDITOR-SPEC.md §8 2026-08-07 实现记录）
+}
+
+interface CameraView {
+  name: string;               // 视角名字，同一份注释里唯一（防重名规则跟 MeasurementBasepoint.name 同一套：
+                               // 撞名自动加数字后缀，不静默覆盖），默认命名"视角"/"视角2"……
+  position: [number, number, number];  // three.js camera.position（跟场景坐标系同一套，即 preprocess() 归一化后的坐标）
+  target: [number, number, number];    // three.js controls.target（OrbitControls 的注视点）
+  fov: number;                 // three.js camera.fov（角度，PerspectiveCamera 视野角）
+  zoom: number;                // three.js camera.zoom（本项目 OrbitControls 未开 zoomToCursor，鼠标滚轮走
+                               // dolly 改 position 不改 zoom，实际取值目前总是 1，但完整对应 camera.zoom 存取，
+                               // 不假设这个字段用不上）
+  up: [number, number, number]; // three.js camera.up——补的第五个字段，不是凭空发明：视口左上角「顶视」预设
+                               // （frameViewportPreset('top')）会把 camera.up 从默认 (0,1,0) 改成 (0,0,-1)，
+                               // OrbitControls 拖拽过程中不会自动纠正这个值，缺了它无法保证"应用视角后画面
+                               // 精确复现保存时的样子"，详见 Doc/EDITOR-SPEC.md §21.2 实现记录
 }
 ```
 
@@ -216,7 +281,9 @@ interface MeasurementBasepoint {
 - `matNotes/texNotes`：键是索引的**字符串形式**（JSON 对象键必须是字符串）
 - `bbox`/`sceneBbox`：导出的 `scene['包围盒尺寸']`/`scene['默认中心点']` 两个展示字符串字段（mm，`SPEC.md` 场景表小节）始终反映当前生效值（自动或手动），查看器直接读这两个字符串就够，不需要自己判断 `sceneBbox.manual` 再挑源头
 - `basepoints`/`basepointRef`：测量基点系统（Doc/TODO.md #10），GLB 原生约定探测规则、坐标系取舍、`zRotation` 具体绕哪根轴，都在 Doc/EDITOR-VIEWER-CONTRACT.md 第五节
+- `defaultBasepointName`/`resolvedReason`：基点优先级下拉 + 导出解释字段（Doc/TODO.md #37），前者是运行时/持久化字段，后者只在导出 JSON 里现算，两者配合把"哪个基点是全局默认、为什么"这件事从纯代码 fallback 逻辑变成用户可见可控的东西，完整规则见 Doc/EDITOR-SPEC.md §8 2026-08-07 实现记录
 - `script`：操作脚本记录 + 重放系统（Doc/TODO.md #13），纯 3AS editor 内部机制，查看器端可以忽略这个字段（不影响渲染/交互），完整设计和实现记录见 Doc/EDITOR-SPEC.md §10
+- `cameraViews`：相机视角书签（Doc/TODO.md #43），每模型独立存储，新建/应用/重命名/删除四个操作对应视口左上角「相机视角」卷展栏，查看器端如果需要还原某个书签视角，直接把五个字段分别写回 `camera.position`/`controls.target`/`camera.fov`/`camera.zoom`/`camera.up`（`fov`/`zoom` 改完记得 `camera.updateProjectionMatrix()`），完整设计和实现记录见 Doc/EDITOR-SPEC.md §21.2
 
 ---
 

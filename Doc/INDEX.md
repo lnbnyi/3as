@@ -16,6 +16,8 @@
 | `2026-08-05-viewer-comparison-table.html` | Babylon.js/model-viewer/three.js 三方对比表（可视化版，本地双击直接用浏览器打开），是上面那份 viewer 对比笔记的延伸——把 Sketchfab 换成了 three.js | 一次性记录，不追加修订；同内容也发布在 claude.ai Artifact |
 | `2026-08-05-ui-review-panel-density.html` | huashu-design 评审：头部按钮排 + 材质/模型块表面板密度，含真实截图对照、折叠改进方案（本地双击直接用浏览器打开） | 一次性记录，不追加修订；同内容也发布在 claude.ai Artifact |
 | `2026-08-05-ui-review-v2-loaded-state.html` | huashu-design 评审 V2：加载模型后的可见性/实用性/CSS 统一性复查（延续第一版视觉语言） | 一次性记录，不追加修订；同内容也发布在 claude.ai Artifact |
+| `2026-08-06-material-panel-redesign.html` | huashu-design 评审 Round 2：材质面板详情/列表顺序对调 + 说明收进 ⓘ 菜单 + 滑动条黑色化 + 视口右侧新工具条（选择/移动/旋转/缩放/包裹框/中心点）提案，对应 `EDITOR-SPEC.md` §17 前身（口述需求见该节背景段） | 一次性记录，不追加修订；同内容也发布在 claude.ai Artifact |
+| `2026-08-06-panels-round3-redesign.html` | huashu-design 评审 Round 3：贴图/模型块/场景三个 Tab 重排方案 + 响应式断点提案，对应 `EDITOR-SPEC.md` §17 | 一次性记录，不追加修订；同内容也发布在 claude.ai Artifact |
 
 ## 惯例：开发/测试产物放 `_dev/`，不放 `Doc/`
 

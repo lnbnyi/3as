@@ -198,6 +198,12 @@ b/c 二选一（互斥），a/d 可以独立开关。这四个操作都要进操
      - 控制台全程 0 报错；顺带重跑了之前几轮的回归测试（`test-highlight.js`/`test-mat-editor.js`/`test-uv-editor.js`/`test-instance-export.js`）确认这轮改动（尤其是 `matHighlightMaterial` 声明位置调整）没有引入回归，全部 PASS
    - 测试脚本：`_dev/test-yellow-highlight.js`（主测试）+ `_dev/gen-yellow-clash-gltf.js`（合成撞色 glTF 生成器）+ `_dev/png-diff-utils.js`（PNG 解码+像素差异工具，可被后续任务复用）。
 
+**复查（2026-08-08，Round 2/3 UI 重排 + 多模型架构批次 #31-41 全部完成后）**：这两条功能（材质画廊点空白处取消选择、材质高亮撞色兜底）是用户最早提过的要求，#31-41 这一大批任务做完后重跑 `_dev/test-yellow-highlight.js` 复查，**应用本身的这两个功能都还正常工作**，但测试脚本本身在两处因为后续任务的合理改动而过期，已经修好并确认全量 PASS（`ALL PASS`，控制台 0 报错）：
+- **`clickGalleryBlank()` 选点逻辑漏判视口边界**：#32（2026-08-07）把材质面板改成「详情在上/画廊在下」之后，画廊被往下推，`.mat-gallery` 的候选空白点（原逻辑取右下角/下边中点）在常见桌面视口高度下经常落到可视区域以外——`document.elementFromPoint()` 在视口外的坐标上返回 `null`，原判断 `!!(el && el.closest('.mat-card'))` 把 `el===null` 误判成"不是卡片＝空白可点"，实际点下去落空，`selectedMat` 自然不会被清空。**这不是应用功能坏了**，是测试脚本的候选点算法没考虑"画廊本身可能比视口还高，需要滚动才能完全看见"这件事——补了视口边界检查 + 滚动到底部兜底两层修复。
+- **`.mat-card` 点击顺带触发 #26 大图预览弹窗**：#26（2026-08-06）之后，点材质色块（`.swatch`）在选中材质的同时会弹出全屏大图预览浮层（`#texPreviewOverlay`），这个测试脚本写于 #26 之前一直没跟着更新，选材质→立刻点空白处这个操作序列，第二次点击其实被浮层挡住了（浮层 `position:fixed;inset:0`，没关就会拦截后续所有点击）。**这也不是应用功能坏了**，是真实用户在这个场景下本来就需要先关掉预览浮层才能继续操作面板其它部分——这是 #26 的既定设计（点色块=选中+预览一起触发，为的是关闭预览后材质详情区已经跳好，不用再点一次），符合弹窗类交互的常规预期。补了 `closeTexPreviewIfOpen()` 在每次"点卡片选中→之后还要点面板别处"的地方先关掉浮层，顺带也把脚本里两处引用 #21（2026-08-06）已经废弃的旧按钮 ID `#exportGlbBtn` 的地方改成现在的下拉菜单入口 `#saveGlbMenuBtn`→`#saveGlbLocalBtn`（这类"旧选择器"问题在这批任务其它测试脚本的完成报告里反复出现过，之前几轮都选择"不顺手修，不在任务范围内"如实记录带过；这次因为要验证的正是这条端到端流程本身，不修就没法把测试真正跑通，所以处理了）。
+- 另外 `.mat-detail` 的"是否存在"判断也顺手对齐了 #32 引入的空状态占位设计——未选中材质时不再是 DOM 里完全没有 `.mat-detail`，而是固定渲染一个 `.mat-detail.mat-detail-empty` 占位（带 ⓘ 说明入口，见 §7「空状态处理」段），断言改成检查"已选中材质的详情区"（`.mat-detail:not(.mat-detail-empty)`）数量为 0，而不是 `.mat-detail` 整体数量为 0。
+- 复查结论：**材质画廊点空白处取消选择、材质高亮撞色兜底（白描边+呼吸动画）这两条功能，在 #31-41 全部完成后依然按原设计正确工作**，问题完全出在测试脚本本身没跟着后续几轮任务的合理改动同步更新，不是功能退化。测试脚本：`_dev/test-yellow-highlight.js`（已修复，可重跑复查）。
+
 ### 6.2 模型块表上下分栏 + 单子节点组合并显示（对应 TODO #20，2026-08-06 完成）
 
 **背景**：两个来源的需求汇成一次改动——① huashu-design 评审 `Doc/2026-08-05-ui-review-panel-density.html` §02「核心列常驻+次级信息展开」，模型块树当时跟材质表一样有「一行塞太多列」的密度问题；② §6 末尾「追加」提到的单子节点组合并折叠需求。两者放一起做是因为合并显示天然需要一个「点开看这一行到底代表哪条链」的地方，而这正好就是分栏后新增的详情区。
@@ -246,6 +252,26 @@ b/c 二选一（互斥），a/d 可以独立开关。这四个操作都要进操
   **已知范围限制（如实记录，不隐瞒）**：如果 glTF 原生 instancing——多个 node 引用同一个 `mesh` 索引——拖拽只会改被拖拽命中的那一个 three.js `Mesh` 实例的 `.material`，`raw.meshes[meshIndex].primitives[primIndex].material` 的改动在 glTF 语义上其实是「这份共享 mesh 数据的材质变了」，理论上应该所有引用同一个 mesh 索引的其它节点也跟着变，但这次没有为这个场景专门写「找出所有共享同一 mesh 索引的其它 `THREE.Mesh` 实例、一起改」的逻辑——真实样品 `chengdu-huagao-0801.glb` 14 个网格节点各自对应独立的 mesh 索引，没有这种共享实例的情况，这次没有为一个当前用不上验证的场景过度设计，留给以后有真实需求时再扩展（`GLTFLoader._getNodeRef()` 在这种共享场景下会 `.clone()` 出新的 `Mesh` 对象但共享同一份 `gltf.parser.associations` 映射，扩展时从这里入手）。
 
 **测试**：真实样品 `chengdu-huagao-0801.glb`（17 材质，14 网格节点）。视图切换：默认块视图，点列表视图按钮后 `.mat-gallery` 加 `list-view` 类、卡片 `flex-direction` 变 `row`、17 张卡片全部带关键参数条，切回块视图类消失，两种视图截图对比。贴图缩略图：材质 #1 上传一张测试 PNG 到 `baseColor` 槽后，画廊卡片精确出现 `<img class="swatch-img">` 且 `src` 是合法 `data:image/` URL（上传前是 0）。多色角标：材质 #0（原始纯黑 fallback）先用材质编辑器改 `baseColor` 成红、再改 `emissive` 成蓝，改完立即（不切视图/不等下次渲染）出现角标，`raw.materials[0].emissiveFactor` 确认真的非默认值，块视图列表视图各截图一张确认都有。取色：用已知节点「Rectangle2133441908」（对应材质 #16，无遮挡）的世界包围盒中心投影到当前相机的屏幕坐标（`window.__debugGallery.screenPositionOfNode(ni)`，真实 `camera`/`renderer` 状态算出来的投影，不是伪造坐标——模型形状不规则，视口正中心不一定真的有几何体，直接猜坐标不稳定），Playwright 在该坐标做真实的 `mouse.down`+`mouse.up`（不是直接调内部函数模拟点击），点击后 `selectedMat` 精确等于预测命中的材质索引 16、自动切到材质 Tab、对应卡片 `.sel` 类、视口高亮触发、拾取模式自动退出。拖拽：把材质 #0（此时已经是红底蓝自发光）拖到刚才取色定位到的同一个网格（材质 #16 所在的网格）上——`mouse.down` 在卡片位置、`mouse.move` 若干步到目标坐标（含目标点停留触发 `dragover` 悬停）、`mouse.up`；拖拽悬停阶段截图确认目标网格出现白色轮廓描边；松手后同一坐标 `raycastMeshAt` 命中的材质索引变成 0（不再是 16）、`raw.meshes[13].primitives[0].material === 0`、命中 mesh 对象的 `.material` 精确等于 `matInstances.get(0)` 里的共享实例（不是新 clone）；视口截图对比拖拽前（浅绿盒子）/拖拽后（红蓝盒子）肉眼可见外观真的变了；「另存为 GLB」导出后解析 JSON chunk，按节点名 `Rectangle2133441908` 找到导出文件里对应的 mesh/primitive，材质名字精确等于「fallback Material」（材质 #0 的名字）、`baseColorFactor` 精确匹配（跟内存里编辑后的 `raw.materials[0]` 逐分量一致，容差 1e-4）。控制台全程 0 报错。重跑既有回归测试 `test-highlight.js`/`test-mat-editor.js`/`test-texture-upload.js`/`test-scene-menu.js`/`test-node-detail-panel.js` 确认这轮改动（尤其是共用了视口 `dragover`/`drop`/新增 `pointerdown`/`pointerup`/`keydown` 分支这几处touch 到既有代码路径的地方）没有破坏既有功能，全部 PASS。测试脚本：`_dev/test-gallery-toolbar.js`（Playwright，35 项断言全部 PASS，可重跑复查）。截图：`_dev/shots/gallery19-00` 至 `gallery19-07`。调试钩子：`window.__debugGallery`（暴露 `raycastMeshAt`/`assignMaterialToMesh`/`matSecondaryColorHex`/`enterPickMode`/`exitPickMode`/`togglePickMode`/`locateMaterialFromPick`/`screenPositionOfNode` 以及 `matGalleryView`/`pickModeActive`/`draggedMatIndex` 三个只读 getter，供测试脚本直接调核心函数、读模块级状态，不用只靠 DOM/截图肉眼判断）。
+
+### 6.4 模型块 Tab 打磨：3 行结构恢复 + 说明收纳 + 材质色块对齐 + 子节点箭头 + Instance 改名（对应 TODO #36，§17.2，2026-08-07 完成）
+
+**开工前排查**：搜了一遍 `index.html` 有没有本任务相关的残留实现——「折叠三角」`▸/▾`（`.tree-toggle`）和「点击行折叠/展开子树」的状态管理（`collapsedNodes`）在 #20/#29 就已经做好并且在正常工作，这次任务第 4 点（子节点展开/折叠箭头）**不是从零实现**，只是在既有基础上做视觉打磨（字号从 9px 提到 10.5px、hover 时加圆角背景块，让它看起来更像"可点的按钮"），复用了原有的状态管理，一行没有重新发明折叠机制。其余 5 项（3 行结构/ⓘ菜单/材质对齐/Instance改名/去掉导出按钮）搜索确认没有残留实现，从零做。
+
+**1. 列表行 3 行结构恢复**：核实现状后确认 §16.2（#29）定的"三行方案"在 DOM 结构层面其实已经是 3 个 `.node-info-row`（材质/勾选框/别名+关联基点+备注），但**视觉上会呈现成 4 行**——第三行 `.node-info-meta` 塞了别名输入框（120px）+ 关联基点下拉框（约 140px）+ 备注输入框（`flex:1`），三者总宽度在常见面板宽度下会触发 `flex-wrap:wrap`，备注输入框被挤到第二条视觉行，DOM 里仍然是同一个 `.node-info-row` 但肉眼看就是 4 行——真实样品截图验证过这个现象（改动前行高 107px，把备注移出后降到 77px）。**修复**：把「备注」输入框从列表第三行整个移除，改到详情区 `renderNodeDetail()` 新增一个 `<div class="mf-row">备注 + <input></div>`，跟别名/关联基点走同一个 `targetName`（`resolveNodeRowTarget()` 解析出来的挂载点，合并行场景下保持跟别名/关联基点一致的写回目标）——`data-nnote` 属性名和 `el.querySelectorAll('input[data-nnote]')` 的 `onchange` 绑定逻辑完全没变，只是元素挪了位置，同一段绑定代码天然适配。表头文字同步从「别名·关联基点·备注」改成「别名·关联基点」。
+
+**2. 详情区顶部说明文字收进 ⓘ 菜单**：复制 `#matHelpOverlay`（#32）/`#texHelpOverlay`（#35）同款组件，新增 `#nodeHelpOverlay`/`#nodeHelpPanel`/`#nodeHelpBody`（外壳/CSS 逐字节照抄，只换了 `node` 前缀和内容），把原来常驻在列表上方的一整段长句子（"节点树共N个节点·56个网格块+56个分组·只包一个子节点的分组自动合并显示成一行…"）拆成 4 段人话塞进浮层，列表上方只留一行短计数「节点树共 N 个节点 · M 个网格块 + K 个分组」。`renderNodeDetail()` 的两个分支（`selectedNodeIdx === null` 空状态 / 选中态）都各自渲染一份 `.mdh` + `#nodeHelpBtn`——这是跟 #32/#35 同款约定：说明入口任何时候都点得到，不会因为没选中节点就连帮助入口一起消失（任务原文明确要求"未选中节点时ⓘ图标依然要能点"）。
+
+**3. 材质色块对齐——选了「固定最大宽度 + 横向可滚动」，不是「收起成N个材质▾」**：`.node-info-mats`（列表）加 `max-width:190px; flex-wrap:nowrap; overflow-x:auto`，`.mf-mats-scroll`（详情区，`max-width:260px`）同一个思路。**选型理由**：色块本身已经是紧凑的图标+编号（不像文字动辄十几个字符），横向滚动不需要额外的展开/收起状态管理（不用为每一行单独维护"是否展开"这个新状态，`collapsedNodes` 那套折叠状态管理不需要照搬一份），超出时右侧留一点被裁切的色块边缘就足够提示"还有更多，可以滚"；对比"收起成 N个材质▾"方案，那个需要点开才能看到具体是哪几个材质，日常"扫一眼这一行大概用了几个材质"这个高频诉求反而变麻烦了。**验证**：真实样品 13 行材质数量从 1 到 5 不等，改动前行宽随材质数量变化（长短不一），改动后全部精确等于 190px（`Set` 去重后只有一个宽度值）；用 20 个色块做压力测试（真实样品最多只有 5 个，人工构造更极端场景验证鲁棒性）确认 `scrollWidth`(706px) > `clientWidth`(190px)，`overflow-x:auto` 计算样式生效，行高不会被撑高。
+
+**4. 子节点展开/折叠箭头视觉打磨**：如上所述，折叠机制（`collapsedNodes`/`walk()`）和箭头字符本身（▸/▾）#20/#29 就有，这次只加大字号+hover 背景块，复用既有状态管理一个字没改。用合成文件 `_dev/test-merge.glb`（`BranchGroup` 有 `LeafA`/`LeafB` 两个真实子节点，是本仓库里少数会触发"多子节点组"分支的测试样品——`画稿飞扬v2.glb` 真实样品的全部 13 个组节点都是单子节点组，合并后没有一行带箭头，验证不到这条路径）验证：展开态 5 行，箭头 `▾`；点击折叠后 3 行，箭头变 `▸`；再点一次恢复 5 行。
+
+**5. Instance 改名「样例复制」**：搜了全文件「Instance」关键词，逐条判断改不改——用户可见的界面文案全改（按钮文字「⧉ Instance」→「⧉ 样例复制」、状态栏提示、`logEntry` 日志标题、`pushUndo` 撤销栈提示、`SCRIPT_OP_LABEL.createInstance`、场景菜单"重放操作脚本"按钮的 `title` 提示、设置面板 `EXT_mesh_gpu_instancing` 兼容性说明的 `usageNote`——这条是搜索时才发现的，藏在「设置·附加信息」浮层里的扩展兼容性说明文字，同样是用户看得到的界面文案，一起改了）；代码内部标识符不改（`createInstance()` 函数名、`matInstances` 模块级变量、`gltf.parser.associations` 反查、纯代码注释里提到"创建 Instance"这个概念的地方）——任务原文明确说了这类不用改，改了反而增加不必要的 diff。
+
+**6. 移除详情区「导出」按钮**：确认 #34 新增的视口工具条 `#modeExportBtn` 内部调用的就是同一个 `exportSelectedNode(ni)` 函数（`data-action="export"` 分支，见 §19.7），覆盖的是完全相同的场景（对当前选中节点导出为独立 GLB）——去重顺利，没有发现功能差异，详情区 `[data-detail-exportnode]` 按钮和它的 `onclick` 绑定整段删掉，`exportSelectedNode` 函数本身、`#modeExportBtn` 都一行没动。详情区操作按钮从 3 个（Instance/导出/包围盒）精确剩 2 个（样例复制/包围盒）。
+
+**开工前提到的已知遗留问题排查结果（`.node-detail` 缩放列选择器）**：确认问题属实，根因是 #29（2026-08-06）把详情区"缩放 S"从只读 `<span class="mono">`（挂在 `.mf-row` 里）改成了内联可编辑的三个 `<input id="ndSx/Sy/Sz">`（挂在 `.trs-edit-row > .trs-group` 里，不再是 `.mf-row`）——`_dev/test-cleanup-menu.js` 的 `readDetailScaleS()` helper 还在用旧选择器 `.node-detail .mf-row .mono` 找"缩放 S"这一行，字段结构变了之后这个选择器连"这一行"本身都找不到（`.mf-label` 文本比对失败，因为"缩放 S"现在挂在 `.trs-group` 不是 `.mf-row` 下面），不是这次任务引入的新 DOM 结构，是 #29 遗留、#32 完成报告里已经提前发现并记录、这次顺手确认+修的。**修复范围只在测试脚本**：`readDetailScaleS()` 改成读 `#ndSx`/`#ndSy`/`#ndSz` 三个输入框的 `.value` 拼成字符串，不改 `index.html` 任何代码（这次任务本身没有重写 `.trs-edit-row` 结构，问题不属于"这次任务顺带自然解决"的情况，需要单独修）。验证：独立探测脚本确认旧选择器在当前代码下确实返回"找不到该行"，新选择器能正确读到值且在触发"缩放归一化"批量清理操作后前后数值确实发生变化（`0.001, 0.001, 0.001` → `1, 1, 1`），修复有效。`test-cleanup-menu.js` 其余部分（重命名/浅色/指定色/GLB 导出核对）不受影响。
+
+**验证**：真实样品 `C:\Users\Lin\Desktop\Glb\画稿飞扬v2.glb`（13 块，全部单子节点链）+ 合成文件 `_dev/test-merge.glb`（多子节点组场景）。测试脚本 `_dev/test-todo36-nodetab.js`（Playwright，35 项断言全部 PASS）覆盖：① 空状态 ⓘ 图标存在可点、说明只留一句「点一行查看详情」；② 列表行 DOM 断言精确 3 个 `.node-info-row`、顺序精确是材质/勾选框/别名+关联基点、行内不再有备注输入框、全部行高度一致（证明没有意外换行）；③ 选中态详情区含备注输入框、不含导出按钮、样例复制按钮文案精确等于「⧉ 样例复制」、操作按钮数精确等于 2；备注编辑后正确写回 `nodeAnno().note`；④ 视口工具条 `#modeExportBtn` 触发下载，验证覆盖同一场景；⑤ 材质色块宽度跨不同材质数量的行精确一致、超出时 `overflow-x:auto` 生效；⑥ 全文搜索确认不再出现「Instance」（含 `[title]` 属性遍历），场景菜单「重放操作脚本」提示文字确认已改，实际触发一次「样例复制」操作后页面上出现「样例复制」字样、仍不出现「Instance」；⑦ 展开/折叠箭头在合成多子节点文件上行为正确（5→3→5 行，箭头 ▾/▸ 切换）；⑧ 控制台全程 0 报错。重跑既有回归测试：`_dev/test-todo29.js`（44 项 PASS，含 1 项因本任务而更新的断言——把"第三行含备注输入框"改成"列表无备注输入框+详情区有"，反映的是这次任务的预期行为变化，不是回归）、`_dev/test-todo33-gizmo.js`（54 项 PASS）、`_dev/test-todo34-actions.js`（50 项 PASS）、`_dev/test-bbox.js`（全 PASS）、`_dev/test-basepoints.js`（全 PASS）确认没有破坏拖拽重挂靠/T-R-S内联编辑/gizmo/视口工具条动作组/包围盒/基点相关功能；`_dev/test-instance-export.js` 跑到「另存为 GLB」步骤撞上 #21/#22 已经记录过的 `#exportGlbBtn` 旧按钮 ID 问题（这次任务之前就存在，`Doc/TODO.md` #29/#32/#34 完成报告都独立撞到过、记录过，跟这次改动无关），撞上之前 Instance/样例复制创建、mesh 索引校验、子树克隆等核心逻辑全部正常通过。截图：`_dev/shots-36/00` 至 `06b`（含空状态、选中态三行列表、ⓘ 说明浮层、展开/折叠箭头前后对比、材质色块对齐压力测试）。
 
 ---
 
@@ -370,6 +396,37 @@ b/c 二选一（互斥），a/d 可以独立开关。这四个操作都要进操
 - **验证**：真实样品 `chengdu-huagao-0801.glb`（17 材质，全部同名「fallback Material」，专门用来验证按索引不按名字这条关键正确性）+ `C:\Users\Lin\Desktop\Glb\画稿飞扬v2.glb`（20 材质、9 张真实贴图，验证已有贴图的槽位默认收起状态下入口按钮就带 `.has-tex` 圆点标记、点开直接显示已有贴图缩略图和"替换贴图"文案、点缩略图仍能触发 #26 大图预览）。核心场景全部覆盖：新布局截图（贴图入口内联、折叠卷展栏默认收起）；展开某属性的贴图入口→上传/替换贴图→视口 three.js 实例（`material.map`/`normalMap` 等）确认生效；金属度/粗糙度两个入口按钮 `.on` 状态同步、展开的是同一份 `.tex-inline`；连续编辑 baseColor 贴图/金属度/粗糙度/自发光/法线贴图五步，「还原 (N)」步数从 1 精确递增到 5；切到另一个材质独立编辑一步，两个材质的步数互不干扰（材质 B 编辑/还原时材质 A 仍然是 5 不受影响）；点「还原」后该材质贴图/数值精确回到编辑前状态、步数归零、按钮 `disabled`；#26 大图预览（画廊色块点击 + 详情贴图槽缩略图点击）两个入口都确认没有被这次重构破坏；控制台全程 0 报错。测试脚本：`_dev/test-todo27-matpanel.js`（真实样品，34 项断言全部 PASS）+ `_dev/test-todo27-realtex.js`（真实带贴图样品，8 项断言全部 PASS）。截图：`_dev/shots/todo27-00` 至 `todo27-08`（`09` 没生成——真实带贴图样品里没有法线贴图材质，测试脚本正确走了跳过分支，见该分支内的 console.log）。
 - **既有回归测试重跑**：`_dev/test-uv-editor.js`/`_dev/test-texture-upload.js`/`_dev/test-mat-editor.js`/`_dev/test-alpha-doubleside.js`/`_dev/test-undo-status.js` 五个，全部重跑到 PASS（控制台 0 报错）。这几个脚本原样跑会在多处失败，逐一修复且如实记录改动原因，不是掩盖问题：① 这几个脚本原来直接 `page.click('.mat-card[data-matcard="N"]')` 选中材质，块视图下色块（`.swatch`）占卡片绝大部分面积，点击命中色块会连带触发 #26 大图预览弹窗挡住后续点击——这是 #26 完成时就已经记录在案的既有连带行为（`Doc/EDITOR-SPEC.md` §15），不是这次引入的新问题，改成点 `.mname`（材质名字文本）子元素规避；② baseColor/metallicRoughness/emissive 的上传/UV变换控件现在默认收起，需要先点 `.tex-toggle` 展开才能找到里面的 `input[type=file]`/`.uv-range` 等元素，这是这次改动**符合预期的行为变化**，测试脚本相应地在交互前加一次展开点击；③ 每字段独立还原按钮（`.mf-revert[data-revert=...]`/`.mf-revert[data-uvrevert=...]`）已经按设计整个移除，测试脚本里验证"还原"的部分相应改成点新的 `.mdRevertAll`（或者等价的状态栏 `#undoBtn` 全局撤销，两者共享同一个底层栈）；④ 顺手修了这几个脚本里更早就存在、跟这次改动无关的遗留问题——`#exportGlbBtn` 是 #21 就已经改成下拉菜单（`#saveGlbMenuBtn` → `#saveGlbLocalBtn`）的旧选择器，`Doc/TODO.md` #22/#25/#29 的实现记录都提过这个问题、当时都选择不顺手修，这次因为要让这几个脚本重新完整跑通，一并修掉了。`_dev/test-highlight.js`、`_dev/test-gallery-toolbar.js` 等其它同样受 #26 连带行为影响、但跟这次材质编辑器重构没有直接关系的脚本，如实记录同一个问题、这次没有逐个都修（超出这次任务范围）。
 
+**实现记录（材质面板重排：详情上/列表下 + 说明收进 ⓘ 菜单，2026-08-07，#32）**：
+
+对应 `Doc/2026-08-06-material-panel-redesign.html` §02——用户截图标注指出材质 Tab 跟模型块 Tab（#20 已经定的「选中详情常驻区 + 下方精简列表」骨架）顺序不一致，材质 Tab 还是老的「画廊在上、详情在下」，这次把它倒过来对齐。
+
+- **开工前检查残留实现**：搜了「详情上」「列表下」「说明收进」「matHelp」等关键词，`index.html` 里全部无匹配，只有 #31（同一批任务里刚做完的图标尺寸/滑动条颜色）的改动，材质面板顺序/说明入口没有被动过，确认是干净状态、从零实现。
+- **DOM/模板顺序真的对调，不是只挪 CSS**：`renderTab('mat')` 里原来 `el.innerHTML` 拼接顺序是「`.mat-toolbar`（含三行常驻说明文字）→ `.mat-gallery` → 条件性的 `renderMatDetail()`」，改成「`renderMatDetail()`/`renderMatDetailEmpty()`（永远渲染一个，不再是条件性为空）→ `.mat-toolbar`（瘦身后）→ `.mat-gallery`」——这是模板字符串本身的拼接顺序变了，不是靠 CSS `order`/`flex-direction: column-reverse` 这类只改视觉不改 DOM 顺序的取巧写法，Tab 键盘导航/读屏顺序跟着一起对了。`.mat-detail` 的 CSS 分隔线从 `border-top` 改成 `border-bottom`（原来是「贴着上面的画廊」，现在应该是「贴着下面的画廊」）。
+- **说明文字收进 ⓘ 菜单**：原来常驻的「共N个材质·PBR金属度/粗糙度工作流·点击色块编辑·拖卡片到视口网格上可重新指派材质」这行字，从 `.mat-toolbar` 里整个删掉，工具条只留一行短的材质计数（`共 N 个材质` + 有 `KHR_materials_specular` 扩展时追加的「含高光扩展」提示，这条动态判断逻辑原样保留没有跟着文字一起丢）。完整说明挪进新的 `#matHelpOverlay`/`#matHelpPanel` 居中浮层——**照抄** `Doc/EDITOR-SPEC.md` §8（测量基点系统）已有的 `#bpHelpOverlay`/`#bpHelpPanel` 那套外壳（同样的 `position:fixed;inset:0` 背景 + 居中卡片 + 头部「标题+关闭按钮」+ 正文 `<p>` 段落），没有发明新组件，只是从 `bp-` 前缀换成 `mat-`/`matHelp` 命名、hover 强调色从 `--basepoint`（橙）换成材质 Tab 自己在用的 `--accent`（金）。触发入口是详情区标题栏（`.mdh`）右侧一个 `.mat-help-icon`（ⓘ 圆圈图标，14px，跟 `.bp-help-icon` 同一套视觉参数），`margin-left:auto` 让它不管旁边有没有「还原 (N)」按钮都能被独立推到这一行最右侧——不依赖 `.mdRevertAll` 已有的 `margin-left:auto` 规则，两者各自成立，DOM 顺序上 ⓘ 排在还原按钮前面，视觉上两个都贴在右边缘。浮层内容（材质是 PBR 工作流是什么/详情区编辑当前选中材质/画廊点击切换+拖拽指定材质/取色+清理按钮简述）参考旧的常驻说明文字扩写成四段完整句子，不是照抄原文一字不改。
+- **空状态处理（原来没有考虑过的场景）**：原来的实现里，没有选中材质时（`selectedMat === null`，比如用户点画廊空白处主动取消选择——见 §6.1 后续改进 #25）`renderMatDetail()` 根本不会被调用，画廊上方是空的、原来常驻的说明文字兜底撑住了这块空间。这次说明文字挪进 ⓘ 之后，如果详情区完全为空会出现「常驻区没有任何内容、ⓘ 图标本身也消失」的问题——新增 `renderMatDetailEmpty()`，无论是「没有选中材质」还是「模型压根没有材质」都渲染一个 `.mat-detail.mat-detail-empty` 占位块，标题栏一样带 ⓘ（保证任何时候都能点开说明，不会因为没选材质就连帮助入口一起消失），正文是「点击下方色块查看/编辑材质」（真的没有材质时改成「此模型没有材质」）。**默认自动选中第一个材质的既有逻辑没有动**（`buildTables()` 里 `selectedMat = tables.mat.length ? 0 : null`，#7 阶段就有），只是确认了这次顺序对调之后它仍然生效——模型刚加载完，`selectedMat` 已经是 `0`，详情区第一次渲染直接走 `renderMatDetail()` 分支，不会经过空状态。
+- **画廊工具栏/清理菜单入口功能不变，只是位置跟着画廊一起往下挪**：`.gallery-toolbar-actions`（视图切换/取色/清理三个按钮，#19/#4 做的）内部结构、`data-view`/`#matPickBtn`/`#cleanupBtn` 的 `onclick` 绑定代码一行没动，只是这个 `.mat-toolbar` 块在模板字符串里的位置从最上面挪到了 `renderMatDetail`/`renderMatDetailEmpty` 之后、`.mat-gallery` 之前——`el.querySelectorAll(...)`/`$('cleanupBtn')` 这些绑定代码是在 `el.innerHTML` 整体赋值完之后才执行的，不关心 DOM 内部先后顺序，天然不受这次调整影响。
+- **验证**：Playwright + 真实样品 `画稿飞扬v2.glb`（Desktop 路径，20 材质），`_dev/test-todo32-matpanel-reorder.js`，28 项断言全 PASS：① 加载后详情区自动展开非空态、标题带材质名字（默认选中第一个材质的既有逻辑确认仍生效）；② **DOM 结构断言**——`#tables` 容器 `children` 数组里详情区元素下标精确小于画廊元素下标（不只是 `getBoundingClientRect().top` 视觉纵坐标更小，两种判据都测了，前者证明真的是 DOM 顺序变了不是只有 CSS 视觉顺序变了）；③ 工具条文字不再包含"点击色块编辑"/"拖卡片到视口"这些旧长文案，但仍然显示材质计数；④ ⓘ 图标存在，点击后浮层展开、内容含 PBR/拖拽/取色/清理四个关键词，点关闭按钮/点外部背景两种方式都能收起；⑤ 点画廊空白处取消选择后详情区变成空状态，空状态下 ⓘ 依然可点开浮层（新增的空状态兜底逻辑），重新点色块后详情区恢复正常；⑥ 视图切换/取色按钮/清理按钮三个入口都还在且可点，切列表视图 CSS 类正确切换，清理菜单浮层能正常打开关闭；⑦ 控制台全程 0 报错。另外单独起了一个改动前（`git show HEAD:index.html`，独立端口）的对照截图（`_dev/shots-32/99-BEFORE-mat-tables-cropped.png`，画廊在上 3 行说明文字 + 详情在下）跟改动后（`_dev/shots-32/01-mat-tables-cropped.png`，详情在上+ⓘ + 画廊在下）肉眼对比确认顺序真的反过来了。补充验证了取色/拖拽指定材质（#19）这两条画廊工具栏核心链路在重排之后仍然正确工作——`_dev/test-todo32-spotcheck-gallery-core.js`（9 项断言全 PASS）：真实鼠标点击视口网格进入取色模式后 `selectedMat` 精确切到命中材质、详情区（现在在最上面）标题同步跳转到命中材质名字；`assignMaterialToMesh`（拖拽指定材质最终调用的同一个函数）直接调用验证 `raw.meshes[].primitives[].material` 精确写回、three.js Mesh 实例的 `.material` 精确等于共享实例（不是新 clone）。
+- **既有回归测试重跑（如实记录，含撞到的已知无关问题）**：`_dev/test-mat-editor.js` 全部通过（材质编辑写回/用于节点反查/GLB 导出核对，无异常输出）；`_dev/test-gallery-toolbar.js` 原样跑在「块/列表视图切换」「多色角标」两组断言全部 PASS 之后，撞上 #26/#27 已经记录在案、**跟这次改动无关**的既有问题（`page.click('.mat-card[data-matcard=...]')` 命中色块联带弹出大图预览挡住后续点击；贴图槽默认收起要先点 `.tex-toggle` 才能找到 `input[type=file]`），如实记录、这次没有顺手修（超出范围，前面已经确认过的部分 + 独立写的 spotcheck 脚本已经覆盖了核心链路）；`_dev/test-cleanup-menu.js` 原样跑撞上 #21/#22 已经记录在案的 `#exportGlbBtn` 旧选择器问题（下拉菜单化后应该先点 `#saveGlbMenuBtn` 再点 `#saveGlbLocalBtn`），临时打了个补丁副本（未提交进正式测试脚本）验证到底——25/26 条断言 PASS，唯一一条 FAIL 是读 `.node-detail .mf-row` 里「缩放 S」这个 `.mono` 文本节点，但 #29（2026-08-06）已经把节点详情区的 T/R/S 从只读文本改成了内联可编辑的 `input#ndSx` 等控件，这个选择器读不到东西完全在预期之内——**这条 FAIL 落在模型块 Tab（#36 的范围），不是材质 Tab，也不是这次 #32 引入的问题**，跟 a/b/c/d 四个清理选项本身的写回正确性（重命名、随机浅色、指定色、缩放归一化+GLB导出验证）无关，那几条断言全部 PASS。
+- **测试脚本**：`_dev/test-todo32-matpanel-reorder.js`（主验证，28 项断言）、`_dev/test-todo32-spotcheck-gallery-core.js`（取色+拖拽指定材质核心链路补充验证，9 项断言）、`_dev/test-todo32-initial-load.js`（冷启动无模型时控制台 0 报错）。截图：`_dev/shots-32/00` 至 `04`，含改前对照图 `99-BEFORE-mat-tables-cropped.png`。
+- **没有碰的部分（明确排除，如实记录）**：模型块 Tab（`.node-detail`）本身结构没有改动，虽然设计文档 §02 结尾提了一句「模型块 Tab 现在选中前的空状态提示也是一大段说明文字，可以顺手一起处理」，但 harness 任务描述明确写了「不改模型块 Tab（那是 #36 的范围）」，这次没有动它，`.node-detail-empty` 还是原来的「点一行查看详情」一句话（它本来就已经很短，不是三行说明文字那种问题）。贴图 Tab（#35）、场景 Tab（#37）、视口新工具条（#33/#34）均未涉及。
+
+**实现记录（贴图 Tab 重建：详情上/列表下 + 删除/改名/替换 + 材质跳转联动，2026-08-07，#35）**：
+
+对应 §17.1（口述需求原文）+ §17.4 决策记录第 4 点（贴图删除遇到多材质共享的确认方案）。跟 #32 材质面板重排同一个骨架规则（详情常驻区在上、精简列表在下），这次轮到贴图 Tab。
+
+- **开工前检查残留实现**：搜了 `selectedTex`/`texHelp`/`tex-detail`/`renameTexImage` 等关键词，`index.html` 里全部无匹配，只有 #16/#26/#27 已经打好底子的既有函数（`UV_SLOTS`/`getSlotTexture`/`uploadMatTexture`/`removeMatTexture`/`rebuildTexTable`/`texRowThumbHtml`），贴图 Tab 本身的详情/列表结构、改名/删除、材质跳转联动都还是干净状态，确认从零实现，不是接手半成品。
+- **DOM 拼接顺序真的对调，不是只改 CSS**：`renderTab('tex')` 从「一行说明文字 + 单张 8 列扁平表格」改成「`renderTexDetail()`/`renderTexDetailEmpty()`（永远渲染一个，模式跟 #32 的 `renderMatDetail`/`renderMatDetailEmpty` 一致）→ 一行短计数 → 精简成 3 列（缩略图/名称/尺寸）的列表」，模板字符串本身的拼接顺序变了。新增模块级 `selectedTex`（贴图表：当前选中的 `raw.images[]` 下标），`buildTables()` 里 `rebuildTexTable()` 之后跟 `selectedMat` 同一个理由默认选中第一张贴图（`tables.tex.length ? tables.tex[0].i : null`），详情区不留空。
+- **详情区内容**：大图预览优先用「有材质当前引用它」这条路径（免解码，复用 `getSlotTexture(t.refs[0].mi, t.refs[0].slotKey)`，画质也最高），没有引用退回 `raw.images[i].uri`（本工具自己上传的贴图或原始 glTF 就是 uri 内嵌），都没有则显示「无法预览」占位（不现场做异步 BIN chunk 解码——那是大图预览弹窗 `openImagePreviewByIndex` 按需做的事，详情区缩略图走同步渲染路径）；格式/尺寸/体积三个只读字段直接读 `tables.tex` 里 `rebuildTexTable()` 已经算好的 `mime`/`dims`/`bytes`；「被哪些材质引用」chip 列表直接用 `t.refs`（`rebuildTexTable()` 里已经在算的 `{mi, slotKey}` 清单，没有另外反查一遍）。
+- **说明文字收进 ⓘ 菜单**：原来常驻的「共N张贴图·支持格式...·点击缩略图查看大图」整行删掉，列表只留一行短计数「共 N 张贴图」；完整说明挪进 `#texHelpOverlay`/`#texHelpPanel`——**照抄** `#matHelpOverlay`（#32）/`#bpHelpOverlay`（§8）同一套「居中浮层+点关闭/点外部背景都能关」外壳，命名前缀换成 `tex-`/`texHelp`，没有发明新组件。空状态（`renderTexDetailEmpty()`，没有选中贴图或模型压根没有贴图）标题栏一样带 ⓘ，任何时候都点得到说明，跟 #32 的空状态处理是同一个理由。
+- **改名**：新增 `renameTexImage(ti, newName)`，只改 `raw.images[i].name`（跟节点表「别名」同一套「简单文本输入框 + onchange 写回」模式）。这个字段是纯展示用途——`GLTFExporter.processImage()` 导出时会重新生成一个符合规范的 name，不读这份 `raw.images[i].name`，所以改这个字段不影响导出正确性，性质上更接近节点「别名」/材质「备注」这类纯展示字段，不是跟 baseColor 那种"改了会影响导出结果"的字段同一类。接入了全局撤销栈（`pushUndo`），**没有接入操作脚本重放系统（§10）**——脚本重放的 `target.kind` 目前只有 `'material'`/`'node'` 两种（`resolveScriptTargetIndex` 硬编码的二选一分支），贴图改名的目标是 `raw.images[]` 下标，要接入第三种 kind 需要同时改 `resolveScriptTargetIndex`/`scriptEntryDescribe` 等好几处代码，这次任务没有要求，如实记录这是范围内特意没做的部分，不是遗漏（对比之下下面「替换」「删除」复用的 `uploadMatTexture`/`removeMatTexture` 本来就是按材质索引记录脚本的，天然兼容现有系统，不需要扩展）。
+- **替换**：新增 `replaceTexImageViaFirstRef(ti, file)`，入口是「选中的贴图索引」，通过 `t.refs[0]`（第一个引用它的材质+槽位）反查转发调用 `uploadMatTexture(ref.mi, ref.slotKey, file)`（#16 已有函数，一行没改，撤销/操作脚本记录天然是它内部已经在做的事）。**没有被任何材质引用时按钮 disabled**（`title`="未被引用，无法替换：这张贴图没有被任何材质使用，不知道要替换哪个材质槽位"）——因为 `uploadMatTexture` 签名是按"材质索引+槽位 key"设计的，一张孤儿贴图不知道该替换哪个槽位，这是任务原文点名要求处理的边界情况。**验证中发现的行为特性（不是 bug，如实记录）**：`uploadMatTexture` 内部总是新增一条 `raw.images`/`raw.textures` 记录再让材质槽位重新指向新索引，不是原地覆盖字节——所以从贴图 Tab 点「替换」之后，原来那张贴图会变成 0 引用的孤儿记录（列表行数 +1），继续留在列表里，符合项目一贯"不做索引位移垃圾回收"的既有原则，但意味着"替换"在贴图 Tab 的语境下观感上更像"新增一张替换用的贴图，旧的那张失去引用"，不是真正意义上的原地替换——这是复用 #16 既有函数的自然结果，没有为了让语义更贴合"替换"这个词而改写 `uploadMatTexture` 本身（改了会影响材质编辑器那边已经验证过的行为）。
+- **删除**：新增 `openTexDeleteConfirm(ti)`/执行时机在确认按钮 onclick 里内联——先用 `t.refs` 列出全部引用清单（`refsSnapshot`，点击「删除」时立即拷贝一份快照，因为循环调用 `removeMatTexture` 时内部会重新 `rebuildTexTable()`，如果还在读同一个正在被改写的数组会有遍历错位风险），弹二次确认浮层（`#texDeleteOverlay`/`#texDeletePanel`，跟材质清理菜单/包围盒面板同一套「居中浮层」外壳，`.tex-delete-list` 逐行列出「材质名 · 槽位」）。**没有被任何材质引用时按钮同样 disabled**（`title`="此贴图未被任何材质引用，没有可清空的引用"）。确认后对 `refsSnapshot` 里每一处引用调用 `removeMatTexture(ref.mi, ref.slotKey)`（#16 已有函数，一行没改，`Doc/EDITOR-SPEC.md` §17.4 决策记录第 4 点"允许删，弹二次确认列出受影响材质"的方案在这里精确落地），循环结束后 `rebuildTexTable()` + `renderTab('tex')` 切回贴图 Tab——**必须手动切回**，因为 `removeMatTexture` 内部结尾硬编码 `renderTab('mat')`（#16 时代就有的既有行为，从材质编辑器调用时理所当然，从贴图 Tab 批量调用时需要在循环结束后自己切回来，这是复用现成函数时唯一需要注意的细节，函数本身没有改）。**如实记录一个直接复用带来的撤销粒度特性**：全局撤销栈（Ctrl+Z）里会因为这次批量删除出现 N 条独立的「移除贴图」记录（N = 受影响材质槽位数），不是单条原子撤销——要完整撤销这次删除需要连续撤销 N 次，这是直接复用 `removeMatTexture` 既有单槽位撤销粒度的自然结果，没有为了做成原子操作而重新包一层，符合任务"直接复用不重写"的要求。
+- **从材质编辑器跳转到贴图（§17.1 第 1 点）**：`renderUvSlot(i, slot)` 缩略图/上传按钮那一行，新增 `getSlotImageIndex(i, slotKey)`（走 `mapDef.index -> raw.textures[].source` 这条 raw JSON 链，不是反查 three.js 实例——因为要拿到的是贴图 Tab 用的同一种"`raw.images[]` 下标"身份，才能跳过去精确选中定位），只在该槽位当前确实有贴图（`cur` 非空）时才渲染「⇥ 贴图」按钮。点击调用新增的 `jumpToTex(ti)`：选中 + 切到贴图 Tab + `requestAnimationFrame` 里滚动定位 + 闪烁详情区（复用材质画廊卡片 `.flash-card`/`matCardFlash` 这个现成的一次性强调动画）+ 闪烁对应列表行（复用节点树 `.flash-row` 这个现成动画）——跟 `jumpToNode`（§6.1）「跳转+定位+高亮」是同一类模式，这次贴图方向照抄，没有新发明交互。反方向（贴图详情「被哪些材质引用」chip 跳回材质 Tab）新增对称的 `jumpToMat(mi)`，同样复用 `.flash-card`。
+- **验证**：本机开发服务器（`php -S 127.0.0.1:18244`）+ Playwright + 真实样品 `画稿飞扬v2.glb`（Desktop 路径，9 张贴图，任务指定样品），`_dev/test-todo35-textab.js`，43 项断言全部 PASS：① 详情区默认展开非空态，**DOM 结构断言**（`#tables` 容器 `children` 数组里详情区下标精确小于列表 `<table class="tex-list-table">` 的下标，不只是视觉纵坐标）、列表精简成 3 列、行数=9；② ⓘ 说明浮层开关两种方式（点关闭按钮/点外部背景）都验证；③ 点列表行选中，详情区标题同步切换；④ 详情区格式/尺寸/体积/改名输入框内容精确核对；⑤ 替换：找一张有引用的贴图上传新文件后 `raw.images` 长度精确 +1、通过 `matInstances` 反查确认 three.js 材质实例的 `.map` 贴图对象 `uuid` 确实变了（不是没生效也不是新建了同 uuid 对象）；⑥ 改名：`raw.images[i].name` 精确写回 + 列表行名称同步刷新 + 全局撤销按钮点击后精确回退到改名前的名字；⑦ 删除：确认框列出的受影响材质数量精确等于实际引用数（真实核对，不是读 UI 数字自证）、点「取消」验证引用数不变（没有误删）、点「确认删除」后验证 raw 层引用清空 + three.js 材质实例对应属性精确置 `null` + 自动切回贴图 Tab + 该贴图删除后替换/删除按钮均变 `disabled`；⑧ 从材质编辑器点「⇥ 贴图」跳转，验证切到贴图 Tab + 详情区选中的正是目标贴图（按名字精确核对）+ 对应列表行处于选中态；⑨ 贴图详情「被哪些材质引用」chip 反向跳转材质 Tab，验证材质详情区选中的正是目标材质；⑩ 未被引用贴图（前面替换/删除测试产生的孤儿记录）的替换/删除按钮均 `disabled` 且 `title` 文案精确核对；控制台全程 0 报错。截图：`_dev/shots-35/00` 至 `06`（含材质编辑器里「⇥ 贴图」按钮外观、贴图 Tab 详情区+列表整体布局、删除二次确认浮层、ⓘ 说明浮层、跳转命中后的闪烁高亮）。
+- **既有回归测试重跑**：`_dev/test-texture-upload.js`（#16，贴图上传/替换/移除核心链路，含真实 GLB 导出 BIN chunk 校验）、`_dev/test-mat-editor.js`（#7，材质编辑写回+用于节点反查+导出核对）、`_dev/test-todo27-matpanel.js`（#27，贴图槽内联入口+还原步数机制）、`_dev/test-todo32-matpanel-reorder.js`+`_dev/test-todo32-spotcheck-gallery-core.js`（#32，材质面板顺序+取色/拖拽指定材质核心链路）全部重跑到位，逐字节对照均无异常输出，控制台全程 0 报错，确认这次改动没有破坏材质编辑器既有功能（贴图 Tab 这次唯一动到材质 Tab 侧的代码只有 `renderUvSlot` 新增的跳转按钮渲染 + 对应的一处 querySelectorAll 绑定，属于纯增量，不影响既有渲染/写回路径）。
+- **调试钩子**：没有新增专用调试钩子——复用既有的 `window.__debugRaw`/`window.__debugMatInstances`（#7/#16 就有），测试脚本里贴图引用关系（`refs`）改用跟被测代码相同的算法在 Node 侧独立重新扫一遍 `raw.materials`/`raw.textures` 交叉核对（不信任 UI 上显示的数字自证），够用，没有必要为了这次任务单独暴露一个新的 `window.__debugTex`。
+- **没有做的部分（明确排除，如实记录）**：改名/替换/删除没有接入 §10 操作脚本重放系统里的"新增 op 类型"（改名完全没接入脚本系统，原因见上；替换/删除因为复用 `uploadMatTexture`/`removeMatTexture` 天然带上了 `uploadTexture`/`removeTexture` 这两个已有 op，不需要新增）；贴图列表没有做批量多选删除（任务原文是"删除"单数，针对单张贴图设计）；孤儿贴图（0 引用）目前只能停留在列表里，没有做真正的物理清理/索引重排功能（跟 #16 移除贴图从不做垃圾回收是同一个既有原则，这次没有引入新行为）。
+
 ---
 
 ## 8. 测量基点系统（对应第 9、10 点）
@@ -399,6 +456,55 @@ b/c 二选一（互斥），a/d 可以独立开关。这四个操作都要进操
 - **说明入口**：「测量基点」标题栏右侧新增 ⓘ 图标按钮（`#bpHelpBtn`），点击弹出跟设置面板/材质清理菜单同一套「居中浮层 + 点外部背景关闭 + 关闭按钮」外壳（`#bpHelpOverlay`/`#bpHelpPanel`）。内容是浓缩过的说明文字（4 句话讲清楚基点是干什么用的 + 三级优先级怎么运作 + 列表标签怎么看），**不是照抄 `EDITOR-VIEWER-CONTRACT.md` 第五节的技术性措辞**（那份文档写给开发者看，讲了坐标系细节/字段名历史沿革这些用户不需要关心的东西）。静态内容不用像设置面板那样「打开时动态渲染」，直接写死在 HTML 里，一次性事件绑定（跟 `#settingsOverlay` 一次性绑定同一处代码块），只有触发按钮 `#bpHelpBtn` 本身在「场景」Tab 每次 `renderTab('scene')` 时要重新绑定（这个按钮是动态渲染内容的一部分）。
 - **验证**（真实样品 `chengdu-huagao-0801.glb` + 复用 #10 阶段的合成 Origin 节点 glTF）：Playwright 脚本 `_dev/test-todo30-basepoint-source.js`，21 项断言全 PASS：① 真实样品默认基点 `source.kind==='auto'`/`priority===2`，`basepointSourceLabel()` 输出文案精确匹配，UI 上 `.bp-source-tag` 文字/样式类跟函数输出逐一核对一致；② 点 ⓘ 图标弹窗展开，说明文字含「Origin」「包围盒」两个关键规则点、长度 293 字符（验证过是浓缩版本，不是照抄整段文档），点外部背景关闭、点「关闭」按钮关闭两种方式都测到；③ 新增手动基点 `source.kind==='manual'`，标注「手动创建」，UI 样式类跟自动基点的 `auto` 类不同；④ 合成 Origin 节点样品验证优先级 1 分支标注「默认（优先级1：GLB内Origin节点）」精确匹配、`source.detail` 里带了命中的具体节点名；⑤ 全程控制台 0 报错。另重跑既有回归测试 `_dev/test-basepoints.js`（#10 阶段验证脚本，含新的 `source` 字段后全部既有断言依然 PASS，没有破坏原有基点增删改/视口标记/相对坐标计算/导出 JSON 功能）。测试脚本：`_dev/test-todo30-basepoint-source.js`（可重跑复查，复用 `_dev/gen-origin-node-gltf.js`/`_dev/test-origin-node.glb`）。截图：`_dev/shots/todo30-00` 至 `todo30-04`。`window.__debugBasepoints` 新增 `basepointSourceLabel` 供测试脚本调用。
 
+**实现记录（2026-08-07，`Doc/TODO.md` #37，场景 Tab 重排：元数据卷展栏 + 包围盒/基准点独立分区 + 基点优先级下拉，§17.3 + §17.4 决策记录第5点）**：
+
+**开工前检查**：先搜了一遍 `resolvedReason`/`defaultBasepointName`/`scene-section`/`bp-default-sel` 等关键词，`index.html`/`Doc/TODO.md` #37 都没有任何残留实现痕迹，确认是干净状态，从零实现（任务描述里提到之前一次代理中途被打断，排查结论一致：没有留下代码）。
+
+**1. 元数据卷展栏**：`.tt` + `.kv` 那段常驻展示的字段（文件名/文件大小/gLTF 版本/生成器/材质贴图网格块统计/顶点三角面/扩展使用/扩展必需/动画蒙皮/光照/边缘框/默认相机）整段包进原生 `<details class="scene-meta-details" id="sceneMetaDetails">`——跟 #27 `.mat-more-tex`（法线/AO 贴图槽折叠）同一个模式，`▸`/`▾` 箭头随 `[open]` 属性切换纯 CSS 做，不用 JS 手写切 class。默认折叠（`sceneMetaExpanded` 模块级变量初值 `false`），`toggle` 事件监听把开合状态写回这个变量，下次因为其它字段编辑（比如新增基点）触发的 `renderTab('scene')` 能保持用户上次的选择，不会每次重渲染都被冲回默认折叠——完全复用 #27 处理 `matUiExpand` 那段"重渲染不冲状态"的手法，这次是场景 Tab 单一开关，不需要 `Map`，一个布尔变量够用。折叠时标题行摘要 `sceneMetaSummary()`：`glTF <版本号> · <N 个扩展 / 无扩展> · <N 个动画 / 无动画>`，三段信息按 `tables.scene` 当前数据现算（不是写死字符串），选这三项是因为它们是"一眼判断这个 GLB 大概什么状态"最核心的几项（版本号决定格式兼容性、扩展决定查看器兼不兼容、动画决定要不要接播放逻辑），文件名/大小已经在头部 `#fileInfo` 常驻显示，不需要在摘要里重复。真实样品验证摘要精确等于 `glTF 2.0 · 无扩展 · 无动画`。
+
+**2. 包围盒独立分区**：原有的"手动指定/自动计算"开关 + 尺寸/中心点数值渲染逻辑一行没改，外面套一层 `.scene-section`（新 CSS 类，`border:1px solid var(--line)` + `margin` 跟上下内容分开），标题栏 `.scene-section-head` 显示「包围盒」+ 右侧「已手动覆盖/自动计算」状态文字（原来是 `.tt` 标题行文字里带的后缀，这次挪进分区标题栏）。
+
+**3. 基准点独立分区**：基点列表/新增按钮/生成默认按钮同样套 `.scene-section`。原来行内的 `.bp-source-tag`（橙色来源标签）整个移除（渲染层面，函数 `basepointSourceLabel()` 本身没删，供调试/`window.__debugBasepoints` 保留），原来场景 Tab 里那段常驻的「GLB 原生约定：场景里有 Origin/_origin/origin 命名节点……」长文字说明也整段挪进 `#bpHelpOverlay` 说明弹窗（#30 已有的 ⓘ 图标+居中浮层组件，这次追加了内容，外壳没改）——弹窗因此从 293 字符涨到 603 字符，仍然是"浓缩过的说明"，不是照抄 `EDITOR-VIEWER-CONTRACT.md` 第五节的技术性原文（那份文档单第五节就有上千字，讲了坐标系/字段名历史沿革这些用户不需要关心的细节）。
+
+**4. 基点优先级下拉（核心新功能）——两层"优先级"要分清楚，这是整个任务最容易搞混的地方**：
+- **第一层（GLB 原生约定的三级优先级，#10/#30 已有，这次没改）**：决定"首次加载模型时怎么算出一颗默认基点种子"——① 场景里有 `Origin`/`_origin`/`origin` 命名节点 → 取它的 T/朝向；② 没有 → 用包围盒中心、朝向 0°；③ 都没有 → 用户手动新增。这套规则只在**模型第一次加载**（`old.basepoints` 不存在）或用户手动点「⟲ 生成默认基点」时触发一次，产出的基点带 `source: {kind, priority}` 标注自己是怎么来的，是**过去时**、写一次就不再变。
+- **第二层（这次新增的"谁是当前默认基点"）**：`anno.defaultBasepointName`（`string | null`）+ `resolveDefaultBasepoint()`——决定"没有显式关联具体基点的节点，相对测量数值该用哪一个基点算"这个问题，是**现在时**、随时可能因为用户操作而改变。规则：① `defaultBasepointName` 有值且指向的基点还存在 → 用这个（用户手动指定，最高优先级，"用户有最终决定权"）；② 否则退回 `basepoints[0]`（数组第一个，#37 之前硬编码的老规则，保持向后兼容）。`effectiveBasepointForNode()`（节点相对基点坐标 fallback 用的那个函数，#8/#20/#34 三处 UI 共用）从直接读 `basepoints[0]` 改成读 `resolveDefaultBasepoint().bp`，函数内部没有手动指定时自己退回 `basepoints[0]`，所以 #37 之前"留空关联 fallback 到场景第一个基点"这条行为对没有用过这个新功能的用户完全不变（`_dev/test-basepoints.js` 全部既有断言不改代码直接复用，PASS）。
+- **UI**：每个基点行右侧一个 `<select class="bp-default-sel" data-bpdefault="${bi}">`，两个选项——`非默认基点` / 动态文案（是当前默认时显示 `✓ 当前默认（<resolvedReason 文案>）`，不是时显示 `设为默认基点`）。选中值本身就编码了"这一行现在是不是默认、如果是靠哪条规则"，不需要另外的文字提示。`is-default` CSS 类给当前默认那一行的下拉框橙色描边，一眼能看出场景里哪个基点在生效。选「设为默认基点」调 `setDefaultBasepoint(idx)`，选回「非默认基点」调 `clearDefaultBasepointOverride()`（只有这一个入口能清空 `defaultBasepointName`，回到自动规则）。
+- **验证（真实样品 `画稿飞扬v2.glb`）**：新增第二个基点、手动改 position 让它跟第一个明显不同、下拉菜单选「设为默认基点」——`anno.defaultBasepointName` 精确写入新基点名字，`resolveDefaultBasepoint()` 返回新基点；挑一个未显式关联基点的节点，`effectiveBasepointForNode()` 在设默认前后分别 fallback 到不同的基点，`computeRelativeToBasepoint()` 算出的相对坐标确实不同（不是凑巧一样），证明"关联该基点的节点相对坐标计算跟着变"这条真的生效，不是只有 `defaultBasepointName` 这个内部字段变了但没有下游影响。
+
+**5. 基点操作接入撤销栈（§13）+ 操作脚本（§10）——这是这次任务里工作量最大的一块，第 3 点提到的"技术复杂度较高"主要指这里**：
+
+**接入点选择**：严格照抄 §13/§10 已有六类调用点的模式——记录挂在"用户操作入口"函数体内（`addBasepoint`/`addAutoBasepoint`/`addBasepointAtNode`/`deleteBasepoint`/`updateBasepointName`/`updateBasepointPos`/`updateBasepointRot`/`setDefaultBasepoint`/`clearDefaultBasepointOverride` 这九个函数），不挂在被多处共用的底层写回帮手 `createBasepoint()` 内部。原因是一个真实的设计考量，不是随手选的：`createBasepoint()` 被 `addBasepoint`/`addAutoBasepoint`/`addBasepointAtNode`（#34 中心点面板"以当前节点位置新建基点"）三处以不同的"完整操作语义"共用，`addBasepointAtNode` 除了创建基点还要多做一步"关联到当前节点"——如果撤销/脚本记录挂在 `createBasepoint()` 内部，这一步关联就没人记，撤销会把基点删了但留下一个指向已删除基点名字的死引用（真实会发生的 bug，不是假设）。所以撤销/脚本记录放在三个"操作入口"各自的函数体里，`addBasepointAtNode` 把"创建+关联"打包成**一条**撤销记录，撤销时把两步一起精确复原——这跟 §10 "材质清理菜单三个子操作合并成一条撤销记录"是同一个设计原则（一次用户手势产生的复合操作，撤销/脚本也应该是一条，不是拆散成好几条让用户自己收拾）。
+
+**`updateBasepointPos`/`updateBasepointRot`/`updateBasepointName` 是「场景」Tab 基点行 + #34 中心点面板四个输入框共用的同一份写回函数**（§19.7 已经确认过这一点），这次撤销/脚本记录只在这一处接入，两个 UI 入口自然都享受到——这也是任务要求里明确点出的"不需要在#34那边重复接入"，实测 `_dev/test-todo34-actions.js`（#34 回归测试）50 项断言全 PASS，中心点面板的新建/关联/编辑功能完全没受影响。
+
+**撤销粒度**：每个数字输入框/文字输入框单独一次 `onchange`（失焦提交）算一步，跟 §13 记录的"节点移动/旋转编辑"、"UV变换"同一个粒度规则；`updateBasepointPos`/`updateBasepointRot` 新增了"数值没变就不产生空的撤销/脚本记录"的短路判断（`oldValue === newValue` 直接 `refreshBasepointUI()` 返回，不推撤销栈也不 `recordScriptOp`）——避免用户点了输入框又没改数值直接失焦时，撤销栈/脚本被无意义的空记录污染。
+
+**级联恢复（撤销时最容易漏的地方）**：
+- `deleteBasepoint(idx)`：删除前拍三份快照——被删基点的深拷贝（`JSON.parse(JSON.stringify(bp))`）、所有 `basepointRef` 指向它的节点名单、它删除前是不是 `defaultBasepointName`；撤销时三者一起精确恢复（`splice` 插回原索引位置、逐个节点 `basepointRef` 写回、`defaultBasepointName` 写回）。原本已有的"删除级联清空节点关联"这一步这次**新增**了第二条级联："如果被删的基点正好是当前手动指定的默认基点，`defaultBasepointName` 也要清空"，不然会留下一个指向已删除基点名字的死引用（`resolveDefaultBasepoint()` 内部虽然有 `basepointByName(anno.defaultBasepointName)` 找不到时退回 `basepoints[0]` 的兜底，不会崩，但 `defaultBasepointName` 这个字段本身会一直脏着指向不存在的名字，直到下次手动清空——数据层面不干净，这次一并修了）。
+- `updateBasepointName(idx, newName)`：改名要做的级联从"节点 `basepointRef` 同步改名"扩展到第三种——`defaultBasepointName` 如果正好指向这个基点的旧名字，也要同步改成新名字，不然"手动指定的默认基点"这个覆盖会在改名后失效（`resolveDefaultBasepoint()` 找不到旧名字对应的基点，退回自动规则），产品行为上是个真实 bug，不是理论边界情况。撤销时这条级联也要精确逆转（改名前是这个基点当默认才需要恢复，不是这个基点当默认时不碰 `defaultBasepointName`）。
+
+**脚本记录格式**（跟 §10 已有格式风格一致，`op` 是能看懂的字符串，粒度跟撤销栈对齐）：`addBasepoint`（`target:null`，`params:{position,zRotation,namePrefix,source,associateNodeTarget?}`——`associateNodeTarget` 只有 `addBasepointAtNode` 这个入口会带）、`addAutoBasepoint`（`target:null`，`params:{}`——重放时不是回放记录下来的旧值，是重新调用一遍 GLB 原生约定探测逻辑，是"用新数据重新跑一遍逻辑"的语义，跟 `cleanupBatch` 同一种设计取舍，因为这个操作本来的意义就是"3ds Max 重新导出后可能有了新的 Origin 节点，重新探测一次"）、`deleteBasepoint`/`renameBasepoint`/`setBasepointPos`/`setBasepointRot`/`setDefaultBasepoint`（`target:{byName,kind:'basepoint',atIndex}`，`ScriptTarget.kind` 新增第三种取值 `'basepoint'`，`SPEC.md` 同步）、`clearDefaultBasepoint`（`target:null`，全局状态清空，没有单一目标）。`resolveScriptTargetIndex()`/`findBasepointIndexByName()`/`computeScriptMissingGroups()`/`currentTargetNameOptions()`/`renderScriptReplayPanel()`（差异梳理 UI）全部泛化成同时支持三种 `kind`（原来只有 `'node'|'material'` 两种），新增 `scriptKindLabel(kind)` 统一三处重复的"按 kind 转中文标签"逻辑。`executeScriptOp()` 新增八个 `case` 分支，全部直接调用对应的操作入口函数本身（`createBasepoint`/`addAutoBasepoint`/`deleteBasepoint`/`updateBasepointName`/`updateBasepointPos`/`updateBasepointRot`/`setDefaultBasepoint`/`clearDefaultBasepointOverride`），`scriptReplaying` 标记包一层防止重放动作自己又被录进脚本——跟既有 `createInstance`/`runMaterialCleanup` 等四个函数同一个防重复录制模式，没有另起一套"重放专用"写回逻辑。
+
+**验证**（`_dev/test-todo37-scenetab.js`，真实样品 `画稿飞扬v2.glb`，82 项断言全 PASS）：新增/编辑位置/编辑朝向/改名/设默认/删除六类操作逐一验证——① 撤销：每类操作后立即调 `window.__debugUndo.performUndo()`，`anno.basepoints`（含改名/删除的级联部分：节点 `basepointRef`、`defaultBasepointName`）精确恢复到操作前状态，逐字段核对不是只看"数量对不对"；② 脚本：每类操作后 `anno.script` 精确 +1（不多不少），`op`/`target`/`params` 逐字段核对（不是只看长度），撤销**不会**删除/新增脚本记录（脚本是永久历史，六类操作全部验证完之后脚本总长度精确等于"初始长度+6"）；③ 重放能重现：单独构造一段"新增→改名→改位置→改朝向→设默认"的干净序列（5 类操作、7 条脚本记录），记下这个基点的最终状态（position/zRotation/`defaultBasepointName`），手动把这个基点从 `anno.basepoints` 里删掉、`defaultBasepointName` 清空（模拟"这段脚本还没被应用过"，`anno.script` 本身不动），调用 `runScriptReplay(new Set())`（跟差异梳理面板"没有缺失目标"分支走的是完全相同的重放执行代码路径），重放后的基点 position/zRotation/`defaultBasepointName` 跟回滚前记录的值逐分量精确核对一致，且重放本身不会往 `anno.script` 里追加新记录（`scriptReplaying` 标记生效，脚本长度重放前后不变）。
+
+**6. 导出 JSON 的 `resolvedReason` 字段——判断逻辑 + 关键边界情况**：
+
+`buildExportJson()` 导出时给每个基点算一个 `resolvedReason`（浅拷贝加字段，不写回 `anno.basepoints[]` 本身，不持久化——"导出时算出来，不是用户填的表单字段"，这条任务要求逐字落实）。四选一（不是任务描述字面说的"三选一"，如实记录这个跟字面描述的差异，理由见下面）：
+
+- `"GLB原生Origin节点"` / `"场景包围盒中心（兜底）"` / `"用户手动指定为默认"`——这三个精确对应任务要求的三个字符串，只用在**当前正在生效的那一个默认基点**身上（`resolveDefaultBasepoint()` 判定出的那一个，全局唯一）。
+- `"非当前默认基点"`——第四种，用在场景里其它全部**不是**当前默认的基点身上。**这是实现过程中必须做出的一个判断，不是漏看了任务要求**：任务允许多基点（决策记录第5点第一条确认过），但"全局默认基点"这个概念定义上只有一个；给不是默认的基点也强行套上"GLB原生Origin节点"这三个选项之一，是在编造一个不成立的结论（比如一个基点自己的 `source.priority===1`，但它已经不是当前默认了，还标"GLB原生Origin节点"会让人误以为它还在生效）。所以做了"是不是当前默认"和"这个基点自己是怎么来的（`source` 字段）"两件事分开的判断，`resolvedReason` 回答的始终是前者。
+
+**关键边界情况（报告里明确要求讲清楚的那条）**：GLB 场景里确实有原生 Origin 节点，模型第一次加载时 `computeDefaultBasepoint()` 已经把它探测出来种进 `basepoints[0]`（`source.priority===1`，这是**过去时**的历史事实，此后不会再变）；用户后来在**另一个**基点（比如手动新增的"二楼基点"）的下拉菜单里选了「设为默认基点」——此时 `anno.defaultBasepointName` 指向"二楼基点"，`resolveDefaultBasepoint()` 按"手动指定优先级最高"直接返回"二楼基点"，不再看 `basepoints[0]` 的 `source` 是什么。结果：
+- 「二楼基点」`resolvedReason = "用户手动指定为默认"`；
+- 那个原本靠 Origin 节点探测出来的 `basepoints[0]`，**它自己的 `source.priority` 仍然是 1**（这个字段本身没有、也不应该被这次"设默认"操作改动——它确实还是靠 Origin 节点探测出来的，这个历史事实不会因为不再是默认而改变），但它的 `resolvedReason` 变成 `"非当前默认基点"`——**不会**因为自己 `source` 字段没变就误报成还在生效成默认，那样会让读导出 JSON 的人（或者以后接 viewer 端的开发者）误以为查看器应该继续把它当默认基点用。
+
+这正是"用户有最终决定权"这条决策要求在数据层面的准确体现：手动指定完全覆盖 GLB 原生探测结果，不是两者取某种折中，也不是"标记两个都是默认之一"这种模糊处理。验证：用合成 Origin 节点样品（`_dev/test-origin-node.glb`）复现这个精确场景——① 没有手动覆盖时 `basepointResolvedReasonForIndex(0)` 精确等于 `"GLB原生Origin节点"`；② 新增第二个基点手动设默认后，第一个基点（Origin 节点那个）的 `source.priority` 用独立读取核对**确实还是 1**（证明这次操作没有偷偷改动它），但 `resolvedReason` 变成 `"非当前默认基点"`；③ 导出 JSON 解析，两个基点各自的 `resolvedReason` 用**跟被测函数完全独立**的判断逻辑在测试脚本里重新写一遍（不调用 `basepointResolvedReasonForIndex`，直接读 `annotations.defaultBasepointName` + 每个基点自己的 `name`/`source` 字段现场判断）逐一核对精确一致。
+
+**这次没做的部分（如实列出）**：视口橙色基点标记目前不区分"是不是当前默认"（`buildBasepointHelper()` 一行没改，全部基点标记视觉上完全一样），只有场景 Tab 下拉框的 `.is-default` 橙色描边能看出哪个是默认——如果以后需要在 3D 视口里也能一眼分辨默认基点（比如给默认基点的标记加个额外的视觉强调），需要另外扩展 `buildBasepointHelper()`，这次任务范围内没有做，属于任务描述之外的锦上添花，没有被要求。
+
+**测试脚本**：`_dev/test-todo37-scenetab.js`（Playwright，82 项断言全 PASS，可重跑复查，覆盖上面①-⑥ 全部验收点）。另更新了 `_dev/test-todo30-basepoint-source.js`（原来断言读 `.bp-source-tag`，这次这个元素不再渲染，改成读新的 `.bp-default-sel` 下拉框当前选中项文字；说明弹窗长度阈值从 500 字符放宽到 900——弹窗内容这次任务要求变长了，不是意外膨胀），更新后全部断言仍然 PASS。重跑既有回归测试：`_dev/test-basepoints.js`（全 PASS，`effectiveBasepointForNode` 改用 `resolveDefaultBasepoint()` 后 fallback 行为对没用过新功能的用户完全不变）、`_dev/test-bbox.js`（全 PASS，包围盒分区改动只是套了个外壳，功能代码没动）、`_dev/test-undo-status.js`（29 项全 PASS）、`_dev/test-todo34-actions.js`（50 项全 PASS，中心点面板不受影响）。`_dev/test-script-replay.js` 重跑时在"点击材质卡片打开清理菜单"这一步撞上一个**跟这次改动完全无关的预置问题**——`#texPreviewOverlay`（#26 大图预览弹窗，点材质色块会顺带弹出预览挡住后续点击，`Doc/EDITOR-SPEC.md` §16.1/§19.6 已经反复记录过这个已知连带效应）拦截了 `#cleanupBtn` 的点击；用 `git stash` 切回改动前的 `index.html` 重跑同一个测试脚本、命中同一个卡点，交叉确认这不是这次改动引入的回归（这次任务的改动范围是场景 Tab + 基点相关函数，完全没碰材质画廊/预览弹窗的任何代码）；在撞上这个卡点之前，脚本已经验证过的"材质字段编辑记进脚本"这部分断言全部正常 PASS。这次任务自己的脚本重放验证（基点部分）改用 `test-todo37-scenetab.js` 里直接调用 `runScriptReplay()`/手动状态回滚的方式独立完成（见上面第 5 点），没有依赖这条撞上已知问题的旧测试路径。截图：`_dev/shots-37/00`（元数据展开）、`01`（分区独立）、`02`（第二基点设默认）。调试钩子：`window.__debugBasepoints` 新增 `resolveDefaultBasepoint`/`basepointResolvedReasonForIndex`/`setDefaultBasepoint`/`clearDefaultBasepointOverride`/`findBasepointIndexByName`。
+
 ---
 
 ## 9. UI 风格规范（对应第 10 点后半）
@@ -414,6 +520,10 @@ b/c 二选一（互斥），a/d 可以独立开关。这四个操作都要进操
 结论：CSS 里 `input[type="range"]` 是裸类型选择器（不带任何 class 限定），全文件唯一一处该规则（`<style>` 只有一处），所有滑动条天然共享同一套 `--bg`/`--panel2`/`--accent` 变量体系，没有发现游离在外用浏览器默认亮色滑块的遗漏点。用 Playwright 对真实样品 `chengdu-huagao-0801.glb`（材质详情区）+ 合成棋盘格样品（UV 变换区，因为真实样品没有贴图槽）逐个截图核对，轨道色 `#2a2a2a`、滑块金色 `var(--accent)`、尺寸 12px 圆形全部一致，控制台无报错。
 
 顺带补的一处小遗漏：滑动条原本没有 hover/focus 交互反馈（`input[type="number"]`/`select` 都有 `:focus{border-color:var(--accent)}`，range 没有对应状态），加了 `:hover`/`:focus` 描边 + 滑块外圈高亮环（`box-shadow: 0 0 0 3px rgba(200,163,95,.25)`，WebKit/Firefox 各写一份伪元素选择器），跟其余表单控件的交互语言保持一致。
+
+**实现记录（#31 滑动条黑色化，2026-08-07，对应 `Doc/2026-08-06-material-panel-redesign.html` §03）**：轨道色 `#2a2a2a` → `#0c0c0c`，比面板背景 `#141414` 更深但没深到纯黑跟背景融为一体分不清边界（设计方案的理由）。CSS 里这个值出现 3 处（`input[type="range"]` 基础规则、`::-webkit-slider-runnable-track`、`::-moz-range-track`），三处都是同一条裸类型选择器规则块内，一次改完，全应用范围天然生效（#11 已经确认过是唯一一处 `<style>`）。滑块金色 `var(--accent)`、hover/focus 描边逻辑都没动。用 Playwright + 真实样品 `画稿飞扬v2.glb` 验证：材质详情区（金属度/粗糙度/自发光强度）+ 材质详情里展开贴图槽后的 UV 变换滑动条（`.uv-range`，这次样品里第 6 个材质刚好带 baseColor 贴图，不用再靠合成棋盘格样品）都实测 `getComputedStyle(inp, '::-webkit-slider-runnable-track').backgroundColor === 'rgb(12, 12, 12)'`，`--accent` 变量值维持 `#c8a35f` 不变。测试脚本：`_dev/test-icon-slider-31.js`。
+
+**实现记录（#31 图标尺寸放大，2026-08-07，对应 `Doc/2026-08-06-material-panel-redesign.html` §01）**：材质/贴图/模型块/场景四个 Tab 按钮（`data-tab="mat"/"tex"/"node"/"scene"`）的内联 SVG 图标，`width`/`height` 从 18 提到 24，`stroke-width` 从 1.4 提到 1.5，`viewBox`/`path` 数据（图标形状本身）完全不动。`#tabs button` 的 `padding` 从 `9px 0` 同步减到 `6px 0`，让按钮总高度维持改动前实测的 36px 不变（18→24 多出 6px，上下各减 3px 抵消）。材质工具条上的「清理」按钮的图标其实是 emoji 字符 `🧹`（不是 SVG，没有"线宽"概念，`stroke-width` 这条参数对它不适用，如实记录这个跟四个 Tab 图标的差异）：把 emoji 包进 `<span class="btn-icon">`（`font-size:24px; line-height:1`），按钮改 `display:inline-flex; align-items:center` 让图标和"清理"文字各自按高度居中，垂直 `padding` 从基础 `button` 规则的 `6px` 减到 `2.8px`，抵消图标放大量，总高度维持改动前实测的 31.59375px（±1px 内）不变。验证：Playwright + `画稿飞扬v2.glb`，`getBoundingClientRect()` 实测四个 Tab 图标 `24×24px`、`stroke-width` 属性值 `1.5`、按钮高度 `36px`；清理按钮图标 `font-size` 计算值 `24px`、按钮高度 `31.59375px`（跟改动前基线一致）；`viewBox` 属性确认未被改动（图标形状没变）。改动前/改动后并列截图对比（`git show HEAD:index.html` 起一个独立端口的"改动前"服务器）：`_dev/shots-31/cmp-before-*.png` vs `cmp-after-*.png`。控制台全程 0 报错。测试脚本同上 `_dev/test-icon-slider-31.js`（34 项断言全过）。
 
 ---
 
@@ -703,3 +813,521 @@ localMatrix = inverse(parentWorldMatrix) * targetWorldMatrix
 **测试用真实拖放事件而不是直接调函数**：无头 Chromium 下用原生鼠标 `down`/`move`/`up` 序列**不会可靠触发** HTML5 拖放 API 的 `dragstart`/`dragover`/`drop` 事件（这是浏览器独立的一套拖放会话机制，不是简单靠鼠标事件就能自动映射出来的，任务背景也提示了这一点）——测试脚本改成手动构造真实 `DataTransfer` 对象 + 派发 `DragEvent`（`new DragEvent('dragstart'/'dragover'/'drop', {bubbles:true, cancelable:true, dataTransfer})`），能在 `dragover` 和 `drop` 之间插入截图/断言中间状态（悬停反馈），比 `locator.dragTo()` 更可控。
 
 **测试脚本**：`_dev/test-todo29.js`（Playwright，43 项断言全部 PASS，可重跑复查，覆盖任务一至任务四全部验收点）。截图：`_dev/shots/todo29-01`（三行布局）至 `todo29-07`（拖拽结果）。重跑既有回归测试 `test-bbox.js`/`test-basepoints.js` 全部通过；`test-instance-export.js`/`test-highlight.js`/`test-mat-editor.js`/`test-undo-status.js` 撞上两个跟这次改动无关的既有已知问题（如实记录，不是这次引入的）：① `#exportGlbBtn` 旧按钮 ID（`Doc/TODO.md` #22 已经记录过的 #21 遗留问题，这几个脚本还在用改版前的选择器）；② `#texPreviewOverlay` 拦截点击（`Doc/TODO.md` #26 已经记录过的预期连带效应，点材质色块会顺带弹出预览弹窗挡住后续点击）——两者都在这次任务开始之前就已存在，命中这两个坑之前的断言全部正常通过。测试钩子：`window.__debugReparent`（`reparentNode`/`canReparent`/`isDescendantOf`/`draggedNodeNi`）、`window.__debugTransform` 更新（去掉 `openTransformPanel`/`renderTransformPanel`/`transformPanelNi`，新增 `applyNodeTrsFromInputs`/`revertNodeTrsAll`）。
+
+---
+
+## 17. UI 重排 Round 3：贴图/模型块/场景面板重排 + 响应式支持（口述需求记录，2026-08-06，待评审/排期，未实现）
+
+**背景**：Round 2（材质面板「详情上/列表下」重排 + 说明收进 ⓘ 菜单 + 滑动条黑色化 + 视口新工具条）的设计方案已经发布评审——`Doc/2026-08-06-material-panel-redesign.html`（huashu-design，含真实截图证据 + 线框对比稿），用户看完后确认了方向，并追加了这一轮更大范围的需求：贴图 Tab、模型块 Tab、场景 Tab 三个面板都要做同款「详情在上/列表在下」重排（跟 Round 2 材质面板提议是同一个方向，这次扩大到全部面板），另加若干具体 bug/缺失功能/响应式支持。
+
+**Round 3 设计方案已发布**：`Doc/2026-08-06-panels-round3-redesign.html`（huashu-design，用真实样品 `画稿飞扬v2.glb` 逐条核对现状后产出）。核心结论：① 贴图"重复图片"排查确认不是代码 bug——`raw.images[]`/`raw.textures[]` 9:9 严格一对一、`bufferView` 字节区间互不重叠、缩略图 data URL 逐字节比对全部不同，是两张不同源文件长得像，不是渲染重复，这轮不当 bug 修；② 模型块 Tab 的"详情上/列表下"骨架其实已经在（#20 做的），问题是列表行 4 行（多了「备注」行，需要去掉恢复三行）、顶部长说明文字、材质色块数量不齐；③ 场景 Tab 需要拆成元数据卷展栏/包围盒/基准点三个独立分区，基点优先级从纯文字提示改成下拉菜单。方案里留了 3 个待确认点（贴图删除时多材质共享如何处理、基点优先级下拉是否允许用户覆盖自动值、响应式横屏规则的具体像素值），排期前需要用户过一遍确认。
+
+### 17.1 贴图 Tab
+
+**已实现，2026-08-07，`Doc/TODO.md` #35，实现记录见 §7 末尾**——下面 4 条需求逐条对应：第 1、2、4 点全部完成（详情/列表骨架对调、跳转联动、删除/改名/替换三个操作补齐）；第 3 点「重复图片」在 §17.1 提出前就已经在这次任务的前置排查里确认过不是代码 bug（`raw.images[]`/`raw.textures[]` 9:9 严格一对一，字节区间不重叠），本次任务描述明确排除、不需要重新排查。
+
+1. **从材质编辑器跳转到贴图**：材质详情编辑器里，某个贴图槽已经关联了一张贴图时，需要有个入口能直接跳转到「贴图」Tab 并定位到对应那张贴图——跟现有「用于节点」chip 跳转材质、视口取色跳转材质画廊（§6.1/§6.3）是同一类「跳转+定位+高亮」模式，这次是贴图方向的对应实现，不是新发明交互。
+2. **上下分栏**：贴图 Tab 也要改成「上面详情，下面列表」，跟材质面板 Round 2 提议、17.2 模型块面板是同一个骨架规则，三个 Tab 不要各自一套布局。
+3. **Bug：贴图列表出现重复图片**——需要先复现定位原因（怀疑跟 `raw.images[]`/`raw.textures[]` 的引用关系有关：一张图片数据可能被多个 `raw.textures[]` 条目引用，如果贴图表是按 `textures[]` 逐条渲染而不是按去重后的 `images[]` 渲染，同一张图会在列表里出现多次；需要先读代码确认渲染依据的是哪个数组，再判断是不是这个原因，排期时一起定修复方案）。
+4. **缺失编辑/删除功能**：贴图列表目前看不到删除、改备注等操作入口，需要补上（贴图表本来就有备注字段可编辑，这里的「编辑」具体指什么——比如替换贴图文件、改名——需要跟用户确认清楚范围，见下方待确认清单）。
+
+### 17.2 模型块 Tab
+
+**已实现，2026-08-07，`Doc/TODO.md` #36，实现记录见 §6.4**——下面 8 条需求逐条对应：第 1（上下分栏骨架）在 #20 就已经是原型，这次是打磨对齐；第 2（对齐，材质色块长短不一）、第 4（Instance 改名）、第 5（说明文字砍掉挪走）、第 7（备注列去掉重申三行结构）、第 8（子节点表示更明确）全部完成；第 3（操作入口重排，"导出"挪进"蓝框"）按 §17.4 决策记录第 1 点的确认结论（挪进视口新工具条）实现，`#modeExportBtn` 是 #34 做的，这次去掉了详情区重复的导出按钮；第 6（响应式）不在这次范围内，留给 `Doc/TODO.md` #38。
+
+现状被用户评价为「特别混乱」，具体要求：
+
+1. **上下分栏**：跟贴图/材质同一个方向（模型块面板 #20 已经是「详情区常驻+列表精简」这个骨架的原型，这次是继续打磨对齐到 Round 2 的规范形态，不是从头重来）。
+2. **对齐**：横向、纵向都要对齐——现状详情区/列表区的列宽、同一行内多个字段的对齐存在问题，具体哪几处没对齐，实现前需要走查列出清单。
+3. **操作入口重排**：「导出」按钮挪到前面，放进「蓝框」里——这里「蓝框」应指 Round 2 设计方案里提议的视口右侧新工具条（选择/移动/旋转/缩放/包裹框/中心点），需要跟用户确认「导出」是要整合进那条工具条里，还是详情区自己的操作按钮组内部往前挪顺序，两种是不同的改动范围（见下方待确认清单）。
+4. **Instance 改中文名**：「⧉ Instance」按钮文案改成「样例复制」（全应用范围内出现「Instance」字样的地方都要一起改，包括撤销栈提示文字/操作脚本标签等，不只是按钮本身）。
+5. **说明文字砍掉/挪走**：详情区顶部常驻的这段说明——
+
+   > 「节点树共 112 个节点 · 56 个网格块 + 56 个分组 · 只包一个子节点的分组自动合并显示成一行（合并规则/注释挂载点见 Doc/EDITOR-SPEC.md §6.2）· 点一行查看顶点/三角/通道/属于/材质/世界变换等详情，「创建Instance/导出/包围盒」操作入口 + T/R/S 内联编辑都在上方详情区 · 拖动一行的名称到另一行上可以把它重新挂靠成那一行的子节点（保持世界空间位置不变，见 Doc/TODO.md #29） · 「关联基点」下拉选该节点相对哪个基点计算测量数值，留空＝用场景第一个基点兜底，橙色标记的基点管理见「场景」Tab（见 Doc/EDITOR-SPEC.md §8）」
+
+   用户原话：「不要也看不懂」——不只是嫌长，是内容本身对用户不好懂。跟 Round 2 材质面板提的「常驻说明收进 ⓘ 菜单」是同一个模式，这里直接照搬复用，不用重新设计一遍交互。
+6. **响应式**：支持更小的屏幕、支持横屏。这条其实是全应用范围的要求（不止模型块 Tab），放在这条底下记录是因为用户讲模型块面板时顺带提到的，实现时按全局响应式断点处理，不是模型块单独一套。当前已知的响应式行为只有 `README.md`/`SPEC.md` 提过的「< 900px 上下分栏」，这次要求覆盖更小尺寸 + 横屏方向，具体断点值排期时定。
+7. **备注列去掉，重申列表行 3 行结构**：列表区去掉「备注」列；单行结构维持 #20 定的「材质水平排一行 + 显示/允许编辑/允许选中放第二行 + 别名/关联基点第三行」三行方案——这条像是重申而不是新规则，需要先核实现状实现是否已经偏离了这个三行方案（比如又多塞回了备注列），还是用户说的「一个3行」另有所指，排期前确认。
+8. **子节点表示更明确**：树形列表里，判断一行是不是有子节点（以及展开/折叠状态）目前不够清楚，需要更明显的视觉指示（比如展开/折叠箭头图标、缩进引导线之类），具体视觉方案排期时定。
+
+### 17.3 场景 Tab
+
+1. **元数据折叠**：glTF 版本号、生成器（generator）、扩展清单（`extensionsUsed`）、动画信息这几项，改放进可折叠的卷展栏——跟 Round 2「常驻说明收进 ⓘ 菜单」是类似的「减少常驻信息」思路，只是这里用卷展栏折叠展开而不是弹出浮层，两种交互选哪个排期时定。
+2. **下方分栏目**：折叠区下面，包围盒、基准点分成两个独立栏目/分区，各自都要有编辑功能入口——现状包围盒手动覆盖开关（§7 末尾）、基点新增/编辑（§8）功能本身都已经有，这条应该主要是版面上要求明确分区，不要混排在一起，具体是不是也要补充新的编辑能力排期时确认。
+3. **基点优先级改下拉菜单**：测量基点系统（§8）的三级优先级（① GLB 原生 `Origin`/`_origin`/`origin` 命名节点 → ② 场景包围盒中心 → ③ 手动新增）目前是纯代码里的 fallback 逻辑，没有对应 UI 呈现，这次要求做成下拉菜单可选——具体语义是「选哪个已存在的基点当默认基点」的下拉，还是把三级优先级规则本身做成可视化展示/可调整顺序，两种理解实现范围差很多，需要排期前跟用户确认（倾向理解成前者：基点列表里选一个显式指定为「默认基点」）。
+
+### 待确认清单（不阻塞记录，排期/设计前需要用户确认）
+
+- 贴图「编辑」具体指哪些操作（替换文件？改名？还是别的）
+- 模型块「导出」按钮挪进的「蓝框」是不是 Round 2 提议的视口新工具条，还是详情区按钮组内部重新排序
+- 模型块列表「3 行结构」现状是否已经偏离 #20 定的方案，还是这次说的是别的重排要求
+- 场景 Tab 元数据折叠用卷展栏还是 Round 2 那种 ⓘ 弹出菜单
+- 基点优先级下拉的具体语义（指定默认基点 vs 可视化/可调整优先级顺序）
+- 响应式断点的具体尺寸值（多小算「更小的屏幕」）
+
+### 和 Round 2 的关系
+
+Round 2 提的「详情上/列表下」+「说明收进菜单」两个模式，被这轮需求确认要**推广到贴图/模型块/场景全部面板**，不是材质面板单独的特例。视口新工具条（选择/移动/旋转/缩放/包裹框/中心点）的设计还没有被这轮需求否定或修改，维持 Round 2 提议内容，等一起排期实现。
+
+### 17.4 决策记录（2026-08-07，Round 2 + Round 3 全部待确认点已回答）
+
+用户对两版方案（`2026-08-06-material-panel-redesign.html` Round 2、`2026-08-06-panels-round3-redesign.html` Round 3）里留的待确认点逐条确认，结论如下，实现前不用再问：
+
+1. **新工具条「中心点」按钮**：原话「两者都要，并且显示告诉用户基点在哪里。并且可以编辑，保存」——不是简单二选一菜单，点击后打开的面板要同时具备：① 可以关联到已有基点，② 可以以当前选中节点位置新建基点，③ 面板里显示这个基点当前的位置（不只是选择器，要有可读的坐标展示），④ 位置本身可以在这个面板里直接编辑并保存（不是只读展示）。等于把 §8 测量基点系统的"关联+新增+编辑"三件事收进这一个从工具条触发的面板里，复用 §8 已有的数据结构和写回函数，不是另起一套。
+2. **动作类按钮（包裹框/中心点/导出）触发方式**：直接执行 + 对应面板已展开等待微调（Round 2 提议的推荐项，用户确认）。点击就立即生成默认结果（默认包围盒/默认基点选择/立即触发导出下载），同时对应面板自动展开，不需要用户先确认参数才执行。
+3. **移动/旋转模式的视口拖拽 gizmo**：**这次要做真正的视口拖拽 gizmo**（三个方向的拖拽箭头/旋转环），不是像 Round 2 草案里倾向的"这次只连接数值面板，gizmo 留到下一轮"——用户明确要求这轮就做。这是比原方案更大的工作量，需要处理拖拽命中检测、跟 `OrbitControls` 相机操作的手势冲突（按住 gizmo 拖拽时要临时禁用相机旋转/平移）、世界空间⇄局部空间的换算（复用 §14 已有的 `nodeWorldMatrix()`/`applyNodeWorldTransform` 写回路径，gizmo 只是新增一种驱动数值变化的输入方式，不改写回逻辑本身）。数值面板（#17 已有）保留作为 gizmo 之外的精确输入手段，两者并存。
+4. **贴图「删除」遇到多材质共享引用**：允许删，弹二次确认列出受影响材质（Round 3 提议的推荐项，用户确认）——删除前先反查这张 `raw.images[i]` 被哪些材质的哪些槽位引用（复用 `rebuildTexTable()` 里已经在算的 `t.refs`），弹窗列出材质名单，确认后清空全部这些槽位的引用。
+5. **场景 Tab 基点优先级下拉是否允许用户覆盖**：**允许**，且用户补充了两条延伸要求（原话「按照测量需求会有多个基点。会有历史，json会包含解释，自然允许用户修改」）：
+   - **允许多基点**：本来就支持（`anno.basepoints` 是数组），这条是确认不收窄成单基点。
+   - **要有「历史」**：基点的新增/编辑/删除/默认基点重新指定，这几类操作要接入撤销栈（§13/#22）和操作脚本记录（§10/#13）——这是 #22 完成时明确列过的已知限制（"包围盒/测量基点新增编辑删除没有接入撤销"），这次借着基点优先级变成可交互控件的机会一并补上，不是无限制的版本历史/时间线 UI，是复用现有"撤销栈 + 操作脚本重放"这两套机制。
+   - **导出 JSON 要带「解释」**：每个基点记录新增一个只读的 `resolvedReason` 类字段（导出时算出来，不是用户填的），人类可读地说明"这个基点为什么/是不是当前默认"——比如 `"GLB原生Origin节点"` / `"场景包围盒中心（兜底）"` / `"用户手动指定为默认"`，写入 `annotations.basepoints[]` 供后续查看/调试，不是新开一套解释系统。
+
+**技术复杂度提示（如实记录，不是拒绝，是提前说明工作量）**：第 3 点（真实拖拽 gizmo）和第 5 点（基点操作接入撤销/脚本）是这次新增里工作量明显更大的两项，比原方案设想的范围更深；実现阶段建议拆成独立任务单独验证，不要跟其它小改动（图标尺寸/滑动条颜色这类）混在一个任务里一起做。
+
+---
+
+## 18. 多 GLB 场景合成 + 贴图批量导出（口述需求记录，2026-08-07，未评审/未排期，架构影响大）
+
+**原话**：「另外图片拖拽进入，加载多个glb，多个glb多基点，偏移也要实装进去。另外图片也有批量导出功能。」
+
+**这条跟前面 §17 性质不一样，先标注清楚**：§17 是同一个已加载模型内部面板怎么排布，改动范围局限在 UI 层；这条要求的是**同时加载多个 GLB 文件、在同一个视口场景里合成显示**——这会碰到当前架构一个从项目最早期就有的根本假设：`raw`/`gltf`/`model`/`matInstances`/`tables.*` 等等几乎全部模块级状态目前都是「当前只有一个模型」的单数结构（`let raw`, `let gltf`, `let model`，不是数组/Map），materials/textures/node 三张表、撤销栈、操作脚本、包围盒、测量基点全部代码路径都隐含假设"只有一份数据"。要支持多 GLB 同时加载，不是加一个循环那么简单，是要过一遍这些全局状态往「集合」方向改的影响面。**这次先只把需求记下来，不动代码，也还没有排进 §17 那批实现任务里**——跟之前几轮不一样，这条目前连设计方案草稿都没有，需要先跟用户对齐范围才能评估工作量、拆解任务。
+
+### 拆解出的三个子需求
+
+1. **拖拽加载多个 GLB**：现有拖拽加载入口（视口拖 `.glb` 文件触发 `preprocess()`）目前设计成单文件替换当前模型；这次要支持一次拖入多个文件（或多次拖入累加），全部加载进同一个场景，不是每次都替换掉前一个。
+2. **多 GLB 各自的测量基点 + 偏移**：每个 GLB 各自可以有自己的 `anno.basepoints`（§8 已有结构，目前是"当前唯一模型"的场景级注释，这次要变成"每个已加载 GLB 各自一份"）；「偏移」大概率是指——多个模型各自的世界坐标原点可能不一致（比如两个不同项目分别导出的 GLB，各自坐标系统零点不同），需要有个手动/自动的位置偏移量，让多个模型在同一个视口里正确对齐显示，不是原点全部重叠挤在一起。具体偏移是靠"手动输入 XYZ 偏移量"还是"选各自一个基点对齐到同一世界坐标"这种更智能的方式，需要跟用户确认（很可能是后者——两个模型各自标好基点，工具自动计算让基点重合，这样比手动试参数更实用，但这只是我的猜测，不能替用户拍板）。
+3. **贴图批量导出**：贴图 Tab（§17.1 已经在规划详情/列表重排）要加一个「批量导出全部贴图」的功能——大概率是把 `raw.images[]` 全部贴图打包导出（zip，或者逐个触发浏览器下载），具体是导出当前这一个模型的全部贴图、还是（如果 1/2 做完之后）导出场景里全部已加载模型的贴图汇总，取决于多 GLB 功能落地到什么程度，这条可能需要等 1/2 的范围定了才能定最终形态；但"贴图 Tab 加批量导出按钮"这个小范围（不依赖多 GLB）可以先独立做。
+
+### 待确认（这条比 §17 的待确认更关键，直接决定要不要动架构）
+
+- 「多个 GLB」的使用场景是什么——是"同时看/比较两个独立项目的 GLB"，还是"一个大场景本来就是拆成多个 GLB 文件分别导出，要在这个工具里拼回一个完整场景"？两种场景对"偏移"的语义完全不同（前者更像手动摆放对比，后者更像精确拼接需要对齐基准点）。
+- 已有的材质清理菜单(§5)/撤销栈(§13)/操作脚本(§10)/选中高亮(§6.1) 这些功能，多 GLB 场景下是要"每个模型各自独立一套"还是"全场景共用一套，只是数据来源变多"？这直接决定architecture 改动是"轻量加一层模型集合包装"还是"大量现有函数要从单例改签名带 modelId 参数"。
+- 这个功能预期使用频率——如果是偶尔用一次的场景比较需求，值不值得为它改动这么大范围的核心状态管理？如果是高频需求，可能需要专门规划一轮架构重构而不是塞进当前这批 UI 调整任务里一起做。
+- 「批量导出贴图」范围——导出格式（保持原格式 zip 打包 vs 逐个触发浏览器下载）、命名规则（保留原始文件名 vs 加材质名前缀防重名）需要定。这条相对独立，风险低，不受多 GLB 问题阻塞。
+
+### 决策记录（2026-08-07，用户已回答，创建实现任务见下）
+
+1. **用途**：拼接成完整场景——多个 GLB 本来就是同一个场景拆成多个文件导出的，要在这个工具里拼回去。**「偏移」需要精确对齐，不是粗略摆放**，靠基点配对计算偏移量（呼应本文档第一版立项时"这段体验以后要变成 viewer 的一部分"这个方向——多文件精确拼接比"随手对比两个不相关模型"更接近这个工具的定位）。
+2. **既有功能的多模型隔离范围**：材质清理菜单(§5)/撤销栈(§13)/操作脚本(§10)/选中高亮(§6.1) 每个模型各自独立一套。
+3. **优先级**：高频需求，这轮（跟 #31-38 一起）就要做。
+
+### 架构方案（高层，实现时再细化）
+
+现有代码几乎全部模块级状态（`raw`/`gltf`/`model`/`matInstances`/`tables.*`/`currentBuf`/`currentBinOffset`/撤销栈/`anno.script`/`anno.basepoints` 等）从单例改成**按模型 ID 索引的集合**：`models = new Map(modelId -> ModelContext)`，`ModelContext` 就是把上面这些单例字段原样打包成一个对象；新增 `activeModelId`（当前"正在编辑"的模型，材质/贴图/模型块 Tab 面板显示的都是这个模型的数据，跟"场景里显示了几个模型"是两回事——面板永远只对着一个模型编辑，不做"同时编辑多个模型"这种更复杂的东西）。视口渲染时把每个模型各自的 `model`（three.js `Group`）包一层「放置容器」`Object3D`，容器上的 transform 承载模型间的对齐偏移，跟 `preprocess()` 已有的视口归一化变换分层（不要混在一起，参考本文档前面记录过的"两套世界空间"教训）。
+
+**基点对齐流程**（初步设想，实现时跟用户再对一遍细节）：加载第二个及以后的 GLB 时，如果它也有基点（§8 已有结构），弹出「对齐到已加载模型」选择器——选一个已加载模型 + 该模型的一个基点 + 新模型自己的一个基点，工具算出让两个基点世界坐标（含朝向）重合所需的变换，写进新模型的「放置容器」transform。不做基点自动配对猜测（比如靠名字相同自动配对），一律用户手动选，避免猜错导致模型对齐到错误位置这种不容易第一时间发现的错误。
+
+**已有功能隔离方式**：既然状态已经按 `ModelContext` 分好，材质清理菜单/撤销栈/操作脚本/选中高亮这几个功能本身的代码逻辑基本不用改——它们已经是"读写当前模型的这些字段"，只要这些字段从模块级 `let` 变成 `activeModel.xxx`，函数体内部逻辑不用重写。真正的工作量在：① 把现有几十处直接引用模块级变量的地方（`raw`/`gltf`/`model` 等）统一改成走 `activeModel.` 前缀（是体力活+要非常仔细不漏改，不是设计难题）；② 新增模型切换器 UI（Tab 栏下方或视口角落，列出已加载模型，点击切换 `activeModelId`，切换时四个面板整体刷新）；③ 视口需要同时渲染全部已加载模型（不只是 `activeModel` 那个），只是编辑操作对着 `activeModel`。
+
+### 实现任务
+
+拆成三个任务（见 `Doc/TODO.md`/harness TaskList #39-41）：
+- **#39** 多模型核心架构：`ModelContext` 集合改造 + 拖拽多文件加载 + 模型切换器 UI——地基性质，#40 依赖它
+- **#40** 基点对齐引擎 + 对齐选择器 UI——依赖 #39
+- **#41** 贴图批量导出——独立，不依赖 #39/#40，可以并行先做
+
+**风险提示**：#39 是这轮全部任务里改动面最大的一个（前面 #31-38 都是局部 UI 调整，#39 要动几乎每个函数对模块级变量的引用方式），建议单独充分测试，做完先跑一遍全部既有回归测试脚本（`_dev/test-*.js` 全部）确认单模型场景下行为没有退化，再验证多模型场景本身的新行为。
+
+### #39 实现记录（2026-08-07/08 完成）
+
+**架构决策：没有逐处把模块级变量改成 `activeModel.xxx`，改用"整体搬进/搬出"的 harvest/apply 模式——这是权衡过风险之后的取舍，如实记录**。
+
+开工前先梳理了全部要处理的模块级变量：`fileKey`/`anno`/`raw`/`gltf`/`model`/`tables`/`matInstances`/`nodeObjects`/`currentBuf`/`currentBinOffset`/`undoStack`/`uvTexCache`/`matUiExpand`/`collapsedNodes`/`selectedMat`/`selectedTex`/`selectedNodeIdx`。用 `grep -c` 统计发现单是 `raw` 一个变量在 `index.html` 里就有 261 处引用，`anno` 163 处，`tables` 158 处——本节原方案设想的"把几十处直接引用模块级变量的地方统一改成 `activeModel.xxx` 前缀"，实际落地时面对的是接近 700 处分散在几十个函数里的引用点，逐处手工加前缀、逐处独立验证，在这个规模的单文件项目里既难以保证每处都测到，又非常容易漏改一处（尤其是嵌套很深的闭包，比如 `pushUndo` 存的 `undoFn`、`recordScriptOp` 的回放函数——这些闭包捕获的是变量绑定不是某一刻的值，改窜前缀的时候如果漏改其中一层，运行时不会报错，只会在特定时序下读到错误的数据，是那种"测试可能测不出来、上线后偶发"的最难查的一类 bug）。
+
+**改用的方案**：`models = new Map()`（modelId → `ModelContext`）是真正的多模型集合，`ModelContext` 打包 `{id, name, fileKey, anno, raw, gltf, model, placementGroup, tables, matInstances, nodeObjects, currentBuf, currentBinOffset, undoStack, uvTexCache, matUiExpand, collapsedNodes, selectedMat, selectedTex, selectedNodeIdx}`。但上面列的模块级 `let` 变量**一个都没删、没有改名、也没有改成某个对象的属性**——几十个既有函数（`setMatField`/`rebuildNodeTable`/`generateBBox`/`addBasepoint`/`pushUndo`/`recordScriptOp`……）的函数体一行没动，继续读写这些裸变量。新增两个函数 `harvestModuleVarsInto(ctx)`（把当前这批模块级变量的值整体搬进某个 `ModelContext`）/`applyContextToModuleVars(ctx)`（反过来，把某个 `ModelContext` 的值整体搬回这批模块级变量），配合 `activeModelId` 和 `captureActiveModelContext()`/`switchActiveModel(id)`/`restoreActiveModelVisuals()` 几个集中的编排函数，维护一条不变量：**任何时刻，这批模块级变量都精确等于 `models.get(activeModelId)` 的内容**。业务函数不需要知道"当前是不是多模型场景"，它们看到的永远是一份"当前激活模型"的数据——这跟原方案"函数体内部逻辑不需要重写，只改变量取值来源"这条核心要求达成的效果是一样的，只是"取值来源切换"这件事被收敛进了几个集中的函数，而不是分散到几百个调用点各自处理。
+
+**这个决策的代价，如实记录，不假装它不存在**：
+- 如果某处业务逻辑在 `await` 期间跨越了一次 `switchActiveModel()`（比如贴图上传解码到一半，用户切换了激活模型），闭包后续读到的模块级变量会是切换后的新模型，不是发起操作时的旧模型。这次验证覆盖到的异步点（`GLTFLoader.parseAsync`、`createImageBitmap` 解码贴图尺寸）都是在自己的 `await` 之后不再读取跟"这次操作属于哪个模型"相关的模块级变量，没有发现这个理论风险的真实触发路径，但没有专门写测试去构造这种时序竞争场景。
+- 这个模式要求"任何新增的模块级可变状态，只要它是'一份数据挂在某个模型上'的性质，就必须补进 `ModelContext` + harvest/apply 的字段清单"——如果以后有代理往模块作用域加新的 `let` 又忘了补这两个函数，会悄悄变成"全部模型共享一份"，这类 bug 初期不容易被发现（不报错，只是"新加的这个字段莫名其妙跨模型串了"）。已经在 `ModelContext` 声明处和两个 harvest/apply 函数头部写了大段注释提醒这一点。
+
+**开工前的踩坑复盘（§14 两套世界空间教训在这次的应用）**：`model`（three.js `Group`，即 `gltf.scene`）自身只承载 `preprocess()` 里"落地居中缩放"这层归一化变换；新增的「放置容器」`placementGroup`（`THREE.Group`）包在 `model` 外面，`scene.add(placementGroup)`，`placementGroup.add(model)`，承载"模型间对齐偏移"（`Doc/TODO.md` #40 的范围，这次恒为单位矩阵）。两层变换全程没有混在一起写——`preprocess()` 里凡是碰 `model.scale`/`model.position` 的代码一行没动，新增的 `placementGroup` 相关代码只做 `new THREE.Group()`/`add()`/`remove()`，不设置任何 transform。已用测试脚本验证：`model.parent` 精确是 `__placementGroup:` 前缀命名的容器，容器本身是 `scene` 的直接子对象。
+
+**「重新载入 GLB」的容器复用**：`preprocess(buf, fname, opts)` 新增 `existingPlacementGroup` 参数——`mode:'reload'` 时传入当前激活模型已有的 `placementGroup` 实例，函数内部先清空它的子对象（旧 `model`）再塞入新解析出的 `model`，容器实例本身不重新 `new`（`#40` 真正写入偏移量之后，reload 不应该把用户已经对齐好的偏移清掉——这次虽然偏移恒为单位矩阵，但提前把"reload 复用容器"这个骨架搭对了）。`mode:'add'`（新增模型）则 `new THREE.Group()` 新建一个容器。
+
+**多文件拖拽**：视口 `drop` 事件处理器改成遍历 `e.dataTransfer.files` 里全部 `.glb` 文件，**顺序 `await` 逐个调用 `openBuf(..., {mode:'add'})`**，不是 `Promise.all` 并发——因为 `preprocess()`/`buildTables()` 内部借用同一批模块级变量当"解析这一个文件"的草稿纸，并发跑会互相踩踏（后一个文件的 `raw = ...` 覆盖前一个文件还没来得及被 harvest 走的 `raw`）。「打开 GLB → 本地文件」菜单沿用原来的单选 `<input type="file">`（没有加 `multiple` 属性）——多文件加载的主入口是拖拽，菜单入口保持单选是刻意的风险控制：`#fileInput` 同时被「打开 GLB」（`mode:'add'`）和「重新载入 GLB」（`mode:'reload'`）两个不同入口共用，靠一次性标记 `pendingOpenMode` 区分，如果菜单入口也支持多选，`mode:'reload'` 场景下用户不小心多选了文件会有歧义（选第一个还是报错），干脆维持单选，多文件场景交给语义更清晰的拖拽入口。
+
+**发现并修复的一个真实 bug（不是理论风险，是测试真的复现出来的）**：`buildTables()` 是单模型时代遗留的写法——`tables.mat = ...`/`tables.scene = ...` 这类"改 `tables` 现有对象的属性"，不是`tables = {...}` 整体重新赋值（那时候全应用生命周期只有一份 `tables`，这么写没问题）。第一版实现里，后台追加加载第二个模型时没有在调用 `preprocess()` 前把模块级 `tables` 重置成一个全新对象，导致 `buildTables()` 直接在上一步 `captureActiveModelContext()` 刚存进 `ctx_A.tables` 的**同一个对象引用**上做修改——`ctx_A.tables` 和新建的 `ctx_B.tables` 变成同一个对象，编辑模型 A 的材质后，切到模型 B 材质详情面板 `#mdBaseColor` 颜色输入框会错误地显示模型 A 编辑后的颜色（`raw` 数据本身没串——`raw` 每次都是 `GLTFLoader` 重新解析出的全新对象——但 `tables` 这层纯展示派生数据串了）。修复：`openBuf()` 的 `mode:'add'` 分支里，调用 `preprocess()` 之前显式 `tables = { mat: [], tex: [], node: [], scene: {} }`（跟已经在做的 `anno = null` 重置同一个理由）。这个 bug 是 `_dev/test-todo39-multimodel.js` 阶段2b 第一次跑就复现出来的，不是事后猜出来补的测试。
+
+**发现并修复的第二个真实 bug**：`switchActiveModel(id)` 最初漏了刷新 header 顶部的 `#fileInfo` 文件信息条——切换激活模型后材质/贴图/模型块/场景四个面板都正确刷新了，但顶部"文件名 · 大小 · 材质数 · 贴图数 · 网格块数"这一行文字停留在切换前的模型，容易让用户误判"到底在编辑哪个文件"。抽出共用函数 `updateFileInfoText(fname, byteLength)`（原来是三处各自写一份格式完全一样的模板字符串，这次新增第三个调用点时顺手抽出来），`switchActiveModel()` 里补上这一处调用。这个 bug 是截图走查时肉眼发现的（`_dev/shots-39/39-06-switcher-after-switch.png`），随后补了对应断言到 `_dev/test-todo39-switcher-ui.js` 防止再退化。
+
+**模型切换器 UI**：header 里 `#fileInfo`（当前文件名那段文字）右侧新增 `#modelMenuWrap`——跟已有的「场景 ▾」「打开 GLB ▾」「另存为 GLB ▾」同一套 `.menu-wrap`/`.menu-btn`/`.menu-dropdown` 下拉外壳、同一个 `registerMenu()` 基础设施，没有发明新组件。按钮文案「模型 (N) ▾」，没有任何模型时整体 `hidden`（跟 `#viewTools`/`#modeTools` 同一个"模型加载后才显示"惯例）。下拉内容是 `renderModelSwitcher()` 纯动态渲染（每次模型集合变化都整体重渲染，模型数量级只有个位数不需要增量 diff），当前激活模型那一项 `● ` 前缀 + `.active-model` 类加粗高亮。点某一项：关闭下拉 + `switchActiveModel(id)`。
+
+**视口同时渲染全部模型**：不需要改渲染循环本身——每个模型的 `placementGroup` 只要 `scene.add()` 过就会一直留在场景图里（除非用户以后要"卸载模型"，这次任务没有这个需求），既有的 `renderer.render(scene, camera)` 天然会画出全部已加载模型，只是编辑操作（材质面板/节点树/gizmo）永远只对着 `activeModelId` 对应的那一份数据。用两个真实的不同 GLB 样品（`chengdu-huagao-0801.glb` 17 材质 + `画稿飞扬v2.glb` 20 材质）交叉验证过——用 `placementGroup.visible = false` 分别隐藏其中一个，确认两个模型各自有独立、真实不同的几何体在同时渲染（不是同一份内容重复），只是这次两个样品恰好都是同一个客户「Prof.Jimmy Choo」的展台设计变体，视觉上相似度较高，仅靠肉眼看合成截图容易误判成"只有一个模型在渲染"，加了这道"分别隐藏"的交叉验证排除这个误判。
+
+**既有功能改造范围**：材质清理菜单（§5）/撤销栈（§13）/操作脚本（§10）/选中高亮（§6.1）/包围盒（§9）/测量基点（§8）/gizmo（§19）——这几类点名要求验证的功能，因为采用的是 harvest/apply 整体搬迁方案，函数体全部**一行没改**，正确性完全来自"模块级变量在正确的时刻指向正确的 `ModelContext`"这条不变量是否被维护对。逐类验证方式：
+- **撤销栈**：模型 A 做一次材质编辑（`undoLen` 变 1），切到模型 B 确认 `undoStack` 是空的（`undoLen===0`），切回 A 确认 `undoLen` 精确保留。
+- **包围盒**：模型 A 用 `generateBBox(ni)` 生成一个包围盒，切到模型 B 确认视口青色线框数量为 0（`syncBBoxHelpers()` 会在 `restoreActiveModelVisuals()` 里针对新激活模型重新跑一遍，自动清掉上一个模型的残留线框——这两个函数一行没改，"读当前 `anno`"这个既有行为本身就保证了隔离，不需要额外写清理逻辑），切回 A 确认线框重新画出来。
+- **测量基点**：模型 A 用 `addBasepoint()` 新增一个基点（长度变 2），切到模型 B 确认基点列表仍是初始的 1 个（默认基点），互不污染。
+- **操作脚本**：模型 A 的材质编辑 + 新增基点两步操作后 `anno.script` 长度精确为 2，切到模型 B 确认 `anno.script` 是空数组。
+- **选中高亮 / gizmo**：`nodeSelectHelper`/`matHighlightGroup`/`transformControls` 都是场景级单例（不放进 `ModelContext`，因为它们是"视觉呈现"不是"持久数据"）——`restoreActiveModelVisuals()` 在每次切换/后台追加加载完成后，按新激活模型持久化的 `selectedNodeIdx`/`selectedMat` 重新调用既有的 `setNodeSelection`/`clearNodeSelection`/`applyMatHighlight`（这三个函数内部本来就会先清后建），天然保证视觉状态跟着切换正确重建，不会有 A 的高亮框残留在 B 的编辑视图里。gizmo 本身没有单独测试新增代码——它读的 `nodeObjects`/`selectedNodeIdx` 本来就是模块级变量，自动跟着 harvest/apply 走，`_dev/test-todo33-gizmo.js`（单模型场景）重跑全部 54 项断言 PASS 确认没有退化。
+
+**验证**：
+- **第一阶段（单模型场景零退化）**：重跑了任务要求的全部既有回归测试——`test-mat-editor.js`/`test-uv-editor.js`/`test-texture-upload.js`/`test-todo32-matpanel-reorder.js`/`test-todo35-textab.js`/`test-todo36-nodetab.js`/`test-bbox.js`/`test-basepoints.js`/`test-todo37-scenetab.js`/`test-undo-status.js`/`test-todo29.js`/`test-todo33-gizmo.js`/`test-todo34-actions.js`/`test-todo38-responsive.js` 全部 PASS；`test-cleanup-menu.js`/`test-instance-export.js`/`test-script-replay.js` 三个在核心断言全部 PASS 之后，撞上跟这次改造无关的既有已知问题（`#exportGlbBtn` 是 #21 头部菜单重构后遗留的旧选择器；`#texPreviewOverlay` 拦截点击是 #26 已经记录在案的问题）——用 `git diff` 确认这次改动完全没有碰过这两处代码路径，如实记录为既有问题不是新回归。`test-todo36-nodetab.js`/`test-basepoints.js`/`test-todo37-scenetab.js` 三个测试脚本里原本"不 reload 页面、直接对 `#fileInput` 第二次 `setInputFiles` 期待替换语义"的用法，因为 `#fileInput` 现在默认是"追加"语义，需要相应改成走「场景 ▾ → 重新载入 GLB」的真实入口（`page.waitForEvent('filechooser')` + 点击 `#reloadGlbBtn`）或者 `page.reload()`——这是测试脚本要适配这次故意做出的语义变化，不是产品代码的 bug，已同步修好并重新跑通。
+- **第二阶段（多模型场景）**：新增 `_dev/test-todo39-multimodel.js`（39 项断言）+ `_dev/test-todo39-multidrop.js`（单次 `drop` 事件携带 2 个不同真实 GLB 文件的 `DataTransfer`）+ `_dev/test-todo39-openmenu-add.js`（「打开 GLB → 本地文件」菜单入口累加验证）+ `_dev/test-todo39-switcher-ui.js`（11 项断言，真实点击模型切换器下拉菜单，不走 `__debug` 钩子）。覆盖：`placementGroup` 分层结构、单次/多次/菜单三种入口的累加加载、"第一个模型自动激活，后续不自动切换"规则、模型切换器 UI（列表渲染/当前项高亮/真实点击切换/`header` 文件信息条同步）、材质编辑/撤销栈/包围盒/测量基点/操作脚本五类功能的隔离性（用真实 UI 交互编辑模型 A，独立读模型 B 的 `ModelContext` 确认零污染，再切回 A 确认编辑保留）、视口同时渲染验证（`placementGroup.visible` 分别切换排除"看起来像只有一个模型"的视觉误判）。
+- 控制台全程 0 报错（贯穿全部新增测试脚本 + 全部重跑的既有回归测试）。
+
+**已知未覆盖 / 有意留白的部分（如实列出）**：
+- 没有为"异步操作跨越 `switchActiveModel()`"这种理论时序竞争风险写专门的压力测试（见上面"这个决策的代价"一节），现有代码路径没有发现真实触发场景，但没有形式化证明它不存在。
+- 贴图 Tab（`selectedTex`）的隔离性没有像材质/包围盒/基点那样写专门断言——`selectedTex` 走的是跟 `selectedMat`/`selectedNodeIdx` 完全同一套 harvest/apply 机制，原理上没有理由表现不同，但没有额外用真实 UI 交互单独测一遍这一项。
+- 场景整体包围盒手动覆盖（`anno.sceneBbox`）、`defaultBasepointName` 手动指定默认基点（`Doc/TODO.md` #37）这两项没有单独测隔离性——同样是走 `anno` 整体 harvest/apply，原理上应该正确隔离，但没有专门验证。
+- 没有测试"加载 3 个及以上模型"的场景，只验证了 2 个模型；`models` 是普通 `Map`，理论上不应该有数量上限问题，但没有实测超过 2 个的场景。
+
+调试钩子：`window.__debugModels = { models, activeModelId, switchActiveModel, openBuf, makeModelId, currentModuleState }`，跟既有 `window.__debugRaw`/`__debugScene` 等同一套暴露方式，供测试脚本直接读多模型集合状态、触发加载/切换，不用只靠拖拽 DOM 事件才能测多模型场景。
+
+### #40 实现记录（2026-08-08 完成，依赖 #39）
+
+**开工前检查**：先跑了 `_dev/test-todo39-multimodel.js`（39 项 PASS）、`_dev/test-basepoints.js`（全 PASS）、`_dev/test-bbox.js`（全 PASS）确认 #39/#8/#9 基线是绿的。搜了一遍 `index.html`（`对齐`/`align`/`拼接` 等关键词），除了 #39 留下的 `placementGroup` 骨架注释（"恒为单位矩阵，#40 范围"）外没有任何相关残留实现，从零开始。
+
+**触发流程**：`openBuf()` 的 `mode:'add'` 后台追加分支（`!willBecomeActive`）末尾新增一段检查——`ctx.anno.basepoints`（新模型自己的基点列表，用 `ctx`，不是模块级 `anno`，因为此刻模块级变量已经被 `applyContextToModuleVars(activeCtx)` 换回原激活模型的数据）非空，且 `candidateAlignModels(ctx.id)`（场景里其它带基点的已加载模型）非空，两个条件都满足才 `await openAlignPicker(ctx)`。第一个模型加载（`willBecomeActive===true`）时场景里必然没有"别的模型"，`candidateAlignModels` 永远返回空数组，这条分支天然不会触发，不需要用 `willBecomeActive` 再判一次。
+
+**选择器 UI**：`#alignOverlay`/`#alignPanel` 照抄包围盒/中心点面板（`#bboxOverlay`/`#centerPointOverlay`）同一套「居中浮层，静态 DOM 不进 `renderTab` innerHTML」外壳，不发明新样式。三个下拉框——① 已加载模型 A（`candidateAlignModels()` 结果，排除新加载的这个）；② A 的一个基点（联动 A 的选择变化）；③ 新模型自己的一个基点——**不做任何自动按名字配对猜测**（§18 决策记录第 1 条逐字落实：多模型场景下几乎每个模型都会自动种一个名叫「默认基点」的基点，如果按名字自动配对会把互不相关的两个"默认基点"错误地配成一对，这正是决策记录警告的"猜错导致对齐到错误位置"），下拉框默认选中各自列表第一项只是原生 `<select>` 行为，不是本工具替用户做的判断。「跳过（不对齐）」放在标题栏（视觉上等价"关闭"），但**没有绑定点击背景关闭**这个交互——这是这次任务里对既有面板惯例的一处刻意偏离：对齐是"加载流程的一部分"，不是包围盒/中心点那种"随时能关的辅助面板"，如果沿用点击背景关闭，用户误触背景会在没有意识到的情况下跳过对齐，必须显式点「对齐」或「跳过」两个按钮之一。
+
+**对齐算法**（标准的"给定一对锚点重合，反解相似变换"公式，无缩放项）：
+
+新增 `basepointWorldTR(bp, placementGroup)`——把基点存储的局部值（`bp.position`/`bp.zRotation`，这套数值所在的坐标系是"它所属模型的 `placementGroup` 局部坐标系"，见下面"跟 #39 架构的磨合"一节）变换成真实世界 T + 四元数：
+
+```
+localPos  = Vector3(bp.position)
+localQuat = Quaternion.fromEulerY(bp.zRotation)          // 只绕 Y 轴，见 §8 zRotation 约定
+worldPos  = placementGroup.matrixWorld · localPos          // 恒等 placementGroup 时 = localPos
+worldQuat = decompose(placementGroup.matrixWorld).quaternion · localQuat
+```
+
+`placementGroup` 传 `null`（或未加载模型的占位调用）时退化成 `{position: localPos, quaternion: localQuat}`，即恒等变换，不引入额外分支。
+
+新增 `computeAlignmentTransform(bpA, placementGroupA, bpB)`：
+
+```
+worldA = basepointWorldTR(bpA, placementGroupA)   // A 基点的真实世界 T/R
+localB = basepointWorldTR(bpB, null)              // B 基点在 B 自己模型坐标系下的 T/R
+                                                    // （B 是刚加载的新模型，此刻 placementGroup_B 恒为单位矩阵）
+Q = worldA.quaternion · localB.quaternion⁻¹        // 先解旋转
+P = worldA.position − Q·localB.position            // 旋转确定后，位置直接反推
+```
+
+推导：要求解的 `placementGroup_B` 变换 `T(x) = Q·x + P` 需要满足 `T(localB.position) = worldA.position` 且 `Q·localB.quaternion = worldA.quaternion`，代入即得上式。`localB.quaternion`/`worldA.quaternion` 都是绕 Y 轴的纯旋转（`zRotation` 语义，§8"只绕竖直轴的方位角"），Y 轴旋转在乘法/求逆下封闭（阿贝尔子群），`Q` 的结果数学上保证仍然是纯 Y 轴旋转，不会因为浮点运算引入额外轴分量的漂移。
+
+`applyModelAlignment(ctxB, ctxA, bpA, bpB)` 把算出的 `{position, quaternion}` 写入 `ctxB.placementGroup.position`/`.quaternion`（`scale` 显式钉在 `(1,1,1)`，防御性写法），显式调一次 `updateMatrixWorld(true)`——不是因为 three.js 场景图不会自动重算（会），而是让"对齐完成后立刻同步读 `matrixWorld` 做验证"（比如测试脚本紧接着这一步就读数值）不用等下一帧渲染循环。
+
+**跟 #39 架构的磨合点（如实记录，任务原文点名要求汇报）**：`placementGroup` 引入非单位矩阵变换后，`anno.basepoints` 存储的数值第一次出现"局部值 vs 真实世界值"的分裂——#39 完成时 `placementGroup` 恒为单位矩阵，两者数值上永远相等，所以 §8/§37 写基点相关代码时全部隐含假设了"`bp.position` 就是世界坐标"，这个假设在 #40 之前一直成立、从未被检验过。排查发现两处既有函数直接用了这个假设，如果不修，一旦某个模型真的被对齐（`placementGroup` 不再是单位矩阵），会产生真实的功能错误：
+
+1. **`computeRelativeToBasepoint()`**（§8，模型块 Tab「相对基点坐标」计算）：原实现拿节点的真实世界坐标（`obj.matrixWorld`，因为 `nodeObjects` 是 `model` 的后代、`model` 是 `placementGroup` 的后代，天然含 `placementGroup` 变换）直接减 `bp.position`（不含 `placementGroup`）——如果这个节点所属的模型自己被对齐过，这是两个不同坐标系的数值相减，结果错误。**已修**：改成先用 `basepointWorldTR(bp, 当前激活模型的placementGroup)` 把 `bp` 换算成真实世界值，再跟节点世界坐标相减。`placementGroup` 恒为单位矩阵时这个改动是恒等操作，不影响任何 #39 之前的既有断言。
+
+2. **`syncBasepointHelpers()`/`clearBasepointHelpers()`**（§8，基点橙色标记可视化）：原实现硬编码 `scene.add(helper)`/`scene.remove(h)`——如果当前激活模型自己被对齐过，标记会用未经 `placementGroup` 变换的 `bp.position` 摆在"对齐前的旧位置"，跟已经通过 `placementGroup` 移动过的模型本体脱节，是真实会发生的视觉 bug（标记飘在半空，不跟着模型走），不是假设性的边界情况。**已修**：标记改成挂进"当前激活模型的 `placementGroup`"而不是直接挂 `scene`（`clearBasepointHelpers` 相应改成 `h.parent.remove(h)` 通用摘除，不再假设父级一定是 `scene`）——靠三维引擎场景图父子关系自动带上这次变换，不用像 `computeRelativeToBasepoint()` 那样手动算矩阵。只有激活模型的基点会被可视化，这条跟 §18 既有设计（"视觉状态是单例、不属于任何 `ModelContext`"）一致，切换模型时 `restoreActiveModelVisuals()` 重新调用这个函数，天然会换到新激活模型的 `placementGroup` 下重画。
+
+**没有修的一处平行问题（如实记录，不假装没看到）**：包围盒（§9，`nodeAnno().bbox` 存的 `rotationDeg`/`size`/`center`）是同一类"缓存的世界空间派生值"，理论上有跟基点完全一样的陈旧风险——如果某个节点所属的模型被对齐后，它的包围盒线框（`buildBBoxHelper()`，仍然硬编码 `scene.add()`）也会跟模型本体脱节。这次任务范围明确是"基点对齐引擎"，包围盒不在范围内，为了不越界改动没有顺手修，如实记录这个平行的潜在问题留给以后需要时处理（修法完全类似——把 bbox 线框也挂进 `placementGroup` 而不是 `scene`）。
+
+**精度验证**（`_dev/test-todo40-align.js`，30 项断言全 PASS，两层独立校验方法论，参考 §14/§16/§19 已有的"独立重算校验"）：
+
+- **合成样品**：`_dev/gen-align-test-gltfs.js` 生成模型 A（`Origin` 命名节点，局部 T=(0,0,0)、旋转恒等——这个特例选择是为了让 A 基点的世界坐标精确等于 `preprocess()` 归一化平移量本身，排除缩放干扰，方便交叉验证）+ 模型 B（`_origin` 命名节点，局部 T=(5,1,-3)、绕 Y 轴 40°——平移和旋转都不是零/恒等，两个分量都会被真正验证到，不会因为凑巧是恒等变换蒙混过关）；两个 GLB 各自还挂了一个三角形网格节点撑起包围盒。两个文件都靠 §8 已验证的「GLB 原生约定优先级 1」（`Origin`/`_origin`/`origin` 大小写不敏感自动探测）天然带一个基点，不用在 UI 里手动新建。
+- **流程**：加载 A（不弹窗，没有可对齐目标）→ 加载 B（弹窗，下拉框断言：模型 A 下拉恰好 1 项且排除 B 自己、A 的基点下拉恰好 1 项、B 自己的基点下拉恰好 1 项）→ 点「对齐」（默认选中项就是唯一选项）。
+- **校验层 1（算法精度）**：测试脚本在 Playwright 侧用**纯手写的四元数代数**（`qMul`/`qConj`/`qFromEulerY`/`qRotateVec` 全部手写实现，不调用 `THREE.Quaternion` 的 `multiply`/`invert`，也不调用被测的 `computeAlignmentTransform`/`applyModelAlignment` 本身）独立重算一遍期望的 `placementGroup_B`，用应用实际写入的值逐分量比对，四元数符号歧义（`q` 和 `-q` 表示同一个旋转）先用点积判符号再比。**实测误差 7.1e-15**（IEEE 754 双精度浮点噪声量级）。
+- **校验层 2（物理层，端到端）**：完全不读 `anno` 数据，直接从两个模型 Origin 节点各自的 three.js `matrixWorld.elements`（列主序 4×4 矩阵的原始数组）里手工取平移分量（`elements[12,13,14]`）+ 手工做矩阵×向量乘法把局部 +X/+Z 方向轴变换到世界空间，比较对齐后两个模型 Origin 节点的世界坐标/朝向是否重合——这是最贴近"用户在视口里真正会看到什么"的检验方式，不信任 `anno` 数据层，只信任渲染实际用的场景图矩阵。**实测误差同样是 7.1e-15**，比预先设定的 2e-3 容差好得多。**如实报告一个精度上限的说明**：`bp.position`/`bp.zRotation` 在 `computeDefaultBasepoint()` 里创建时经过 `toFixed(4)`（米，4位小数）/`toFixed(2)`（度，2位小数）量化——这是 #8 就有的既有设计，不是这次引入的，这次合成测试选用的具体坐标（`preprocess()` 算出来的归一化平移量）凑巧落在这次的量化不损失精度的数值上，所以物理层也达到了机器精度；但这不是必然的——如果基点的真实坐标不是这种"整除"数值，`toFixed()` 量化本身会引入米级 1e-4 / 度级 1e-2 量级的截断误差，复合传播到物理层比对上，物理层精度届时会降到那个量级，**这是 #8 基点存储格式的固有分辨率上限，不是这次对齐算法本身的误差来源**——算法本身（校验层1）在任何输入下都应该保持在浮点噪声量级，因为它只是一次性的四元数代数，没有迭代/近似步骤。
+- **真实样品**：`C:\Users\Lin\Desktop\Glb\画稿飞扬v2.glb` 加载两次（第二次加载时改文件名避免 `fileKey` 撞车、误复用第一次的历史注释），走真实 UI 点击流程（不是调试钩子直接调函数）——两份文件基点相同，对齐后完全重合（`placementGroup_B` 写入有限数值，不是 `NaN`/崩溃），验证的是"流程本身通畅"这条任务允许的合理简化场景，不强求两份不同文件。
+- **新模型没有基点时跳过弹窗**：因为首次加载任何模型都会自动种一颗基点（`old.basepoints || [computeDefaultBasepoint()]`），"不带 `Origin` 节点"不足以制造"新模型 0 基点"的场景——测试用了真实存在的代码路径：先加载一次某文件、用 `window.__debugBasepoints.deleteBasepoint(0)` 删光唯一基点（`saveAnno()` 把空数组 `[]` 持久化到 `localStorage`）、刷新页面（`page.reload()`，`localStorage` 保留）、加载一个带基点的模型 A、再加载**同一份**"已删光基点"的文件（`fileKey` 相同，`buildTables()` 里 `old.basepoints || [seed]` 因为 `old.basepoints` 是 `[]`（truthy，不会走 `||` 右边）恢复出 0 个基点，不是重新种子）——确认对齐选择器全程没有弹出过、`placementGroup` 保持单位矩阵。
+- **用户取消（跳过）**：点「跳过」后 `placementGroup` 保持单位矩阵（位置/旋转都验证），状态栏文案精确含"已跳过对齐"字样，且验证了页面后续仍能正常响应 `page.evaluate`（没有卡死/抛错中断）。
+- 全程控制台 0 报错。
+
+**UI 反馈**：`applyModelAlignment()` 只是设置 `placementGroup.position`/`.quaternion`，three.js 场景图下一帧渲染循环自动用新值重算 `matrixWorld`，视口位置立即跟着更新——不需要手动触发重渲染。已用真实截图确认生效（`_dev/shots-40/40-02-after-align.png`：两个合成三角形对齐后在视口里精确重叠成一个，只看得到一个三角形轮廓）。
+
+**回归测试**：`test-todo39-multimodel.js`/`test-todo39-multidrop.js`/`test-todo39-openmenu-add.js`/`test-todo39-switcher-ui.js` 四个 #39 测试脚本因为"加载第二个模型触发对齐选择器"变成了新常态（两份真实样品都会自动种基点），各自补上"等待弹窗出现→点跳过"这一步后全部恢复 PASS；`test-basepoints.js`/`test-bbox.js` 全 PASS（`computeRelativeToBasepoint`/`syncBasepointHelpers` 的改动在 `placementGroup` 恒为单位矩阵时是恒等操作，不影响任何既有断言）；`test-uv-editor.js` 原有"不 reload、直接对 `#fileInput` 二次 `setInputFiles` 期待替换语义"的既有写法（#39 完成时只修了三个测试脚本，这次撞见第四个）因为触发了新弹窗而超时崩溃，补上"等待弹窗→点跳过→手动切到刚追加的模型"三步后恢复正常；`test-mat-editor.js`/`test-texture-upload.js`/`test-todo37-scenetab.js`/`test-undo-status.js`/`test-todo34-actions.js`/`test-todo36-nodetab.js` 全部重跑 PASS，控制台全程 0 报错。
+
+**发现但未修的既有问题（如实记录，不是这次引入）**：`test-todo30-basepoint-source.js` 用 `git stash` 切回 #40 开工前的代码状态交叉验证，确认它在纯 #39 完成态下就已经会在另一个步骤报 `TypeError: Cannot read properties of null`——是 #39 遗留、跟这次改动完全无关的既有测试脚本技术债，不在这次任务范围内，如实记录不顺手修（避免超出任务边界）。
+
+**测试脚本**：`_dev/test-todo40-align.js`（Playwright，30 项断言全 PASS，可重跑复查）+ `_dev/gen-align-test-gltfs.js`（合成测试 GLB 生成器，产出 `_dev/test-align-a.glb`/`_dev/test-align-b.glb`）。截图：`_dev/shots-40/40-01-picker-open.png`（选择器面板）、`40-02-after-align.png`（对齐后视口重叠效果+状态栏文案）、`40-03-real-sample-picker.png`/`40-04-real-sample-aligned.png`（真实样品流程）。调试钩子：`window.__debugAlign = { basepointWorldTR, computeAlignmentTransform, applyModelAlignment, candidateAlignModels, openAlignPicker, closeAlignPicker, alignPickerOpen }`，同既有 `__debugModels`/`__debugBasepoints` 一套暴露方式。
+
+### #41 实现记录（2026-08-08 完成，独立，不依赖 #39/#40）
+
+**开工前先搜了一遍 index.html**：搜「批量导出」「导出全部贴图」「exportAllTex」「JSZip」全部无匹配，`vendor/` 目录下也没有任何通用打包库（只有 three.js 相关的 `controls`/`exporters`/`loaders`），确认是干净状态、从零实现。
+
+**方案选择：方案B（逐个 `<a download>` 触发浏览器原生下载），没有选方案A（JSZip 打包）**——理由如实记录：
+
+- 项目从立项起就坚持「build-free、纯本地 vendor、不依赖 CDN」，`vendor/` 目前只服务 three.js 生态（加载器/导出器/控件），引入 JSZip 会是第一个跟 three.js 无关的通用工具库依赖，且 JSZip 打包需要把全部贴图字节先读进内存拼一个 zip 结构（哪怕是纯本地 vendor，也是额外的运行时内存峰值和一次性 CPU 压缩耗时），换来的收益只是把「用户看到 N 次浏览器下载确认」变成「用户看到 1 次」。
+- 真实样品/典型场景的贴图数量是个位数到十几张（本次验证样品 9 张），方案 B「逐个下载之间插入 180ms 间隔」这个已知的浏览器连续下载拦截风险，在这个数量级下影响可控（验证时 Playwright 环境 9 张全部正常触发，没有被拦截；真实 Chrome/Edge 用户首次触发会看到一次「该网站要下载多个文件」确认弹窗，允许一次后同一站点不会再问，已经在 `#texHelpOverlay` 说明文字里如实告知这个已知的用户体验代价，不是把限制藏起来）。
+- 方案 B 零新依赖，实现和验证都更简单可靠——复用了项目里已有的 `saveGlbLocalBtn`/`exportBtn` 同一套 `URL.createObjectURL(blob) + <a download> + click()` 模式（见 `exportGlbBlob()`/`$('exportBtn').onclick` 附近代码），不用学一个新库的 API、不用担心 zip 格式实现细节（压缩算法/CRC/目录结构）引入新的 bug 来源。
+
+**两种贴图数据来源，`getTexExportBlob(i)` 统一处理，复用 #26/#16 已有的解码路径，没有重新发明**：
+
+1. **GLB 内嵌贴图（`bufferView`）**：跟 `rebuildTexTable()`/`openImagePreviewByIndex()` 完全同一条切片公式——`currentBinOffset + bufferView.byteOffset` 定位到 `currentBuf` 里的字节区间，`new Blob([slice], {type: im.mimeType})` 直接就是原始文件字节。比 `openImagePreviewByIndex()` 那边（那边为了当 `<img src>` 用，会多转一次 canvas → PNG）更保真——这里是下载原始文件用于导出，不需要也不应该经过 canvas 重新编码（会丢失原始格式，JPEG 会被转成 PNG，还会有一次有损转码）。
+2. **本工具自己上传/替换过的贴图**：去代码里确认后发现存储方式是 `raw.images[i].uri`——`uploadMatTexture()`（#16）用 `FileReader.readAsDataURL(file)` 把用户上传的原始文件整个编码成 data URI 存进这个字段（**不经过 canvas**，见该函数注释「保留原始文件字节」），所以导出时直接 `fetch(uri).then(r => r.blob())` 就能拿回逐字节相同的原始文件——验证时用 `Buffer.equals()` 逐字节比对下载文件和本地源文件，完全相同。
+
+**命名去重**：`dedupeExportFileName(name, usedCount)`，`usedCount` 是一次批量导出生命周期内的 `Map`（不是模块级状态，每次调用 `exportAllTextures()` 重新开一个），第 N 次出现同名时在扩展名前插入 `(N)`——`texture.png` → `texture(1).png` → `texture(2).png`，没有扩展名的名字直接在末尾加 `(N)`。
+
+**UI**：贴图 Tab 列表区顶部，跟「共 N 张贴图」计数同一行、右对齐（`.tex-toolbar` 新增，CSS 规则复用材质 Tab `.mat-toolbar` 的 flex 布局，选择器合并写成 `.mat-toolbar, .tex-toolbar`，不重复定义一遍），按钮文案「⇓ 批量导出全部贴图」。没有贴图时（`raw.images.length === 0`）按钮渲染出来但 `disabled`，`title` 提示「此模型没有贴图，无法导出」——照抄 #35 已有的「按钮永远渲染、用 disabled+title 表达不可用」惯例（替换/删除按钮都是这个模式），没有整个按钮隐藏消失。`exportAllTextures()` 本身在 `raw.images.length === 0` 时也会防御性早退（`status('没有可导出的贴图')`），不依赖调用方一定检查过按钮状态才调用。`#texHelpOverlay` 说明浮层追加一段文字介绍这个按钮 + 如实告知浏览器连续下载确认提示的已知代价。
+
+**进度反馈**：导出过程中状态栏文案 `批量导出贴图中…（N/总数）` 实时更新（每完成一张更新一次），全部完成后 `批量导出完成：成功 N 张，失败 M 张`，同时写一条 `logEntry`（有失败张数时用 `warn` 级别，全部成功用 `info`）——不是点一下按钮就没有任何反馈干等浏览器弹下载框。
+
+**默认针对 `activeModel`，没有做"导出全场景多模型贴图汇总"**：`exportAllTextures()`/`getTexExportBlob()` 读的都是模块级 `raw`/`tables`/`currentBuf`/`currentBinOffset`，在 #39 的 harvest/apply 架构下这些变量精确等于 `activeModel` 的数据，天然只导出当前激活模型——任务描述里这条本来就不是硬性要求，这次没有顺手做多模型汇总（会引入"要不要按模型分子文件夹命名""模型间贴图重名怎么防覆盖"这类新问题，超出这次任务范围）。
+
+**验证**（`_dev/test-todo41-texexport.js`，Playwright，28 项断言全 PASS，真实样品 `C:\Users\Lin\Desktop\Glb\画稿飞扬v2.glb`，9 张内嵌贴图）：
+
+- **下载数量精确性**：`page.on('download', ...)` 监听 + 轮询等待，触发一次批量导出后捕获到的下载事件数量精确等于 `raw.images.length`（9 个），不多不少。
+- **字节完整性，两层独立校验**（同 §14/§40 记录的方法论，不信任被测代码或浏览器自己的判断）：每个下载文件用 Node 手写的 PNG/JPEG 文件头解析器（`pngDims()`/`jpegDims()`，直接读 `IHDR` 字段 / 扫描 `SOFn` marker，不调用任何图像解码库、不调用被测的 `createImageBitmap` 路径）独立解出宽高，逐一比对跟 UI 显示的尺寸（`rebuildTexTable()` 用 `createImageBitmap` 异步解出的那份）精确相等——证明下载下来的字节真的是完整、未损坏的图片，不是巧合凑出来的文件大小。另外对 bufferView 来源的全部 9 张，下载文件字节长度精确等于 `bufferView.byteLength`（证明切片没有多切/少切一个字节）。
+- **命名去重**：人为把 `raw.images[1].name` 改成跟 `raw.images[0].name` 相同（等价于用户通过改名输入框把两张贴图改成同名），触发导出后确认第一张保留原名、第二张精确变成 `原名(1).扩展名`，且总下载数量仍然精确等于 9（没有因为重名互相覆盖导致文件"丢失"，这里的"丢失"指的是文件名层面的覆盖风险，不是浏览器下载数量本身会减少——两次导出各自独立触发浏览器下载，这条断言主要验证的是命名逻辑没有把两个不同的 blob 生成同一个文件名）。
+- **上传替换贴图来源**：走真实 UI 流程点击「⇅ 替换贴图」上传本地 PNG（`test-tex-1-red.png`，32×32），确认 `raw.images` 新增一条 `uri` 来源（非 `bufferView`）记录后，批量导出数量精确变成 10（含新贴图），新贴图对应的下载文件用 `Buffer.equals()` 跟本地源文件逐字节比对完全相同，独立解码出的尺寸 32×32 也跟本地源文件一致。
+- **无贴图禁用态**：复用已有的 `_dev/gen-empty-slot-gltf.js` 合成样品（`test-empty-slot.glb`，`materials` 存在但没有任何贴图槽，`raw.images` 是 `undefined`）——用干净的 `page.reload()` 重新单独加载（不是在已有模型基础上追加，因为 #39 之后 `#fileInput` 默认是"追加新模型"语义，直接追加不会让空贴图模型变成激活模型，这个坑在写测试时先撞到过一次，改成 reload 后独立加载解决），确认按钮渲染出来但 `disabled`、`title` 含"没有贴图"提示，且直接调用 `window.__debugTexExport.exportAllTextures()` 不抛异常、给出状态栏提示。
+- 全程控制台 0 报错。
+- **既有回归**：重跑 `_dev/test-todo35-textab.js`（贴图 Tab #35 全部既有功能），43 项断言全部 PASS，没有破坏详情/列表布局、跳转联动、改名/替换/删除。
+
+调试钩子：`window.__debugTexExport = { exportAllTextures, getTexExportBlob, dedupeExportFileName }`，同既有 `__debugAlign`/`__debugModels` 一套暴露方式，供测试脚本既能走真实 UI 点击（配合 `page.on('download')`），也能直接调底层函数独立验证解码/命名逻辑，不用每次都触发一整轮下载。
+
+**测试脚本/截图**：`_dev/test-todo41-texexport.js`（可重跑复查）；截图 `_dev/shots-41/41-00-tex-tab-with-export-btn.png`（按钮在贴图列表顶部的位置）、`41-01-empty-state.png`（无贴图禁用态）。
+
+---
+
+## 19. 视口新工具条：模式组（选择/移动/旋转/缩放）+ 真实拖拽 gizmo（对应 `Doc/TODO.md` #33，§17.4 决策记录第2、3点，2026-08-07 完成）
+
+**背景**：§14（节点移动/旋转基础编辑）当时只做了数值输入这一条路径（面板里的 T/R°输入框），视口拖拽 gizmo 明确留到了以后。§17.4 决策记录第3点用户后来明确要求这轮就要做真正的拖拽 gizmo，不是继续往后拖——这一节就是那部分的实现记录。**跟 §14 是并存关系，不是替换**：数值面板（现在是 #29 之后的详情区内联 `ndTx`/`ndTy`/`ndTz`/`ndRx`/`ndRy`/`ndRz`/`ndSx`/`ndSy`/`ndSz` 九个输入框）原封不动，这次只是新增了第二种驱动同一份底层数据的输入方式。
+
+### 19.1 vendor：TransformControls.js（r166，版本对齐确认）
+
+`vendor/controls/TransformControls.js` 是新增文件，直接从 `https://raw.githubusercontent.com/mrdoob/three.js/r166/examples/jsm/controls/TransformControls.js` 原样取的，一行没改。版本号确认：`vendor/three.module.js` 里 `const REVISION = '166'`，跟现有 `vendor/loaders/GLTFLoader.js`/`vendor/controls/OrbitControls.js`/`vendor/exporters/GLTFExporter.js` 是同一个 r166，任务要求的"不要引入不匹配版本"这条满足。r166 的 `TransformControls` 是老式 API——它本身就是 `Object3D`（内部把可视 gizmo 当子对象直接挂在自己身上），`scene.add(transformControls)` 就能用，不是更高版本 three.js 才有的 `.getHelper()` 拆分写法（那种新写法在 r166 上会直接报错，确认过没有混用）。
+
+### 19.2 新工具条骨架
+
+视口右侧新增竖排 dock `#modeTools`，位置对称于左侧已有的视角预设工具条 `#viewTools`（`position:absolute; top:12px; right:12px`），跟 `#viewTools` 同一套「竖排 + gap:1px 露分隔线」的紧凑小工具条外壳，直接照搬其 CSS 结构和配色公式（`.on`/`.active` 都是「文字变 `--accent`、背景变 `--panel2`」，不是另发明一种高亮方式）。模型加载后才显示（`buildTables()` 末尾跟 `#viewTools` 同一行一起 `hidden = false`）。
+
+- **上半组（互斥，四选一）**：▢ 选择（默认）/ ✥ 移动 / ↻ 旋转 / ⤢ 缩放，`data-mode` 属性驱动，点击调 `setEditMode(mode)`。
+- **中间分隔条**：`.mode-tools-sep`，不设自己的背景色，露出容器本身的 `--line` 背景，视觉上跟按钮间 1px 缝隙同一个原理，只是故意留得更高做出分组感。
+- **下半组（快捷动作，占位）**：⬚ 包裹框 / ⊕ 中心点，`data-action="bbox"`/`data-action="center"`，**这次只搭视觉骨架，没有绑定任何 `onclick`**——具体行为是 `Doc/TODO.md` #34 的范围，任务原文明确要求不要抢先实现避免跟 #34 代理重复/冲突，按钮点击目前没有任何反应（不是遗漏，是刻意留白，代码里有对应注释）。
+
+### 19.3 「选择」模式：视口点击选中节点
+
+新增 `raycastNodeAt(clientX, clientY)`：复用既有 `raycastMeshAt()`（#19 视口取色已经在用的同一条命中路径）拿到点击命中的 `THREE.Mesh`，再沿 `.parent` 链向上走，用 `gltf.parser.associations` 查 `info.nodes !== undefined`（`isNodeLevelObject()` 同一个判定思路，处理多 primitive 网格节点内部的 `Group` 包装层，跟 `createInstance` 附近现有注释的做法一致），找到最近的「节点级」对象即为命中的节点索引。
+
+视口新增一对 `pointerdown`/`pointerup` 监听器，跟 #19 视口取色（`pickModeActive`）同一套「按下-抬起距离阈值（5px）判定点击 vs 拖拽转视角」手法，互斥于：① 材质取色模式激活时（取色优先）；② 这次 pointerdown 命中了 gizmo 本身（`transformControls.dragging` 在 TransformControls 自己的 pointerdown 处理里同步置 true，早于事件冒泡到 `viewport` 的监听器，见下面 19.4）。命中节点后直接复用 `jumpToNode(name)`（§6.1 已有的「选中+切到模型块 Tab+滚动定位+闪烁高亮」全链路，不新写一套选中反馈）。
+
+点击行为在四个模式下都生效（不只是「选择」模式）——跟 `Doc/2026-08-06-material-panel-redesign.html` §04 的设计说明一致：「选中某个模式后，点视口里的物体即按该模式操作」，移动/旋转/缩放模式下点别的物体一样会切换选中目标。「选择」模式的特殊之处只是不出 gizmo（`editMode==='select'` 时 `syncGizmoToSelection()` 直接 `detach()`）。
+
+### 19.4 「移动」「旋转」「缩放」：真实拖拽 gizmo
+
+`const transformControls = new TransformControls(camera, renderer.domElement); scene.add(transformControls);`——只 `scene.add()`，不进 `model` 子树，天然被 `GLTFExporter` 导出路径排除（跟 §6.1 选中高亮/包围盒线框同一个既有约定），已用 `scene.children.includes()`/`model.children.includes()` 两条断言验证。
+
+- **模式切换**：`setEditMode(mode)` 只在 mode 是 `translate`/`rotate`/`scale` 时调 `transformControls.setMode(mode)`；`syncGizmoToSelection()` 统一收敛「gizmo 该不该显示、挂在哪个节点上」的判断（`editMode==='select'` 或没有选中节点就 `detach()`，否则 `attach(nodeObjects.get(selectedNodeIdx))`），在 `setNodeSelection()`/`clearNodeSelection()`/`setEditMode()` 三处调用点都收敛到这一个函数，不在多处各自判断一遍。
+- **缩放模式没有做简化版**：TransformControls 官方自带 `scale` 模式（跟 `translate`/`rotate` 是同一个类的三种模式，`setMode('scale')` 即可），接入成本跟另外两种模式完全一样，**这次做的是真实拖拽缩放手柄，不是"点物体展开数值面板缩放输入框"那种简化版**——任务允许在精度/复杂度问题较大时降级，但实测下来 TransformControls 本身已经把三种模式都做好了，没有必要降级，如实报告没有做简化。
+- **跟 OrbitControls 的手势冲突**：照抄 three.js 官方推荐模式，监听 `transformControls.addEventListener('dragging-changed', ev => { controls.enabled = !ev.value; ... })`——`dragging` 是 TransformControls 内部用 `Object.defineProperty` 包装的属性，值变化时自动 `dispatchEvent({type:'dragging-changed', value})`，不是这次自己发明的机制。已用真实鼠标 down/move-序列/up 验证：按下命中轴手柄那一刻 `controls.enabled` 立即变 `false`，拖拽过程中相机 `position`/`target` 全程保持不变（≠ 相机跟着转/平移），松手后 `controls.enabled` 恢复 `true`。
+- **数值同步（gizmo → raw.nodes）**：`gizmoTargetWorldTR(ni, parentOf)`——TransformControls 拖拽期间直接改的是 `obj.position`/`.quaternion`/`.scale`（three.js 场景图对象的父级局部空间属性，语义上跟 `raw.nodes[ni]` 的 `translation`/`rotation`/`scale` 是同一件事），**不能直接把这仨字段原样抄进 `raw.nodes[ni]`**（虽然数值上是对的，但会绕开 §14/#29 统一走的"世界空间换算+校验"这条路径）——正确做法是：用 `obj` 当前的局部变换现算一个局部矩阵，乘父节点的 `nodeWorldMatrix(pni, parentOf)`（父节点没被这次拖拽动过，`raw.nodes[pni]` 仍权威）得到目标世界矩阵，`decompose()` 出目标世界 T/Rdeg/S，喂给 §14 已有的 `applyNodeWorldTransform(ni, targetT, targetRdeg, targetS)`——**跟 #17/#29 数值面板输入走的是完全同一个写回函数**，gizmo 只是新增了第三种（前两种是数值输入框、#29 之前的独立弹窗）算出 `targetT/targetRdeg/targetS` 的方式。这里特别要注意**不能**直接用 `nodeWorldMatrix(ni,...)` 读被拖拽节点自己的世界矩阵——那个函数读的是 `raw.nodes[ni]`，这一刻还是拖拽前的旧值（TransformControls 只改了 three.js 对象，没有改 `raw`），必须现读 `obj` 的局部变换。
+- **拖拽结束才算一次完整操作**：`dragging-changed` 从 `true→false`（松手）那一刻，① 判断有没有真的变化（跟数值面板同一个"没动过不产生撤销记录"标准）；② 有变化才调 `applyNodeWorldTransform` 写回；③ `pushUndo`/`recordScriptOp`（`op: 'setNodeTransform'`，**复用 #29 数值面板已经在用的同一个 op 名字**，重放/差异梳理不需要为 gizmo 单独识别一种新操作类型）；④ `renderTab('node')` 刷新数值面板。拖拽开始（`dragging-changed` 变 `true`）那一刻拍一次"变更前"世界 T/R/S 快照（`getNodeWorldTR`，跟数值面板 `applyNodeTrsFromInputs` 的 before 快照同一条路径），供松手时算 diff/撤销用。
+- **双向同步**：① gizmo → 数值面板——拖拽结束提交后 `renderTab('node')` 重渲染详情区，数值输入框读的是当时最新的 `getNodeWorldTR()`，天然显示拖拽后的值；② 数值面板 → gizmo——数值面板提交（`applyNodeTrsFromInputs`）本来就调 `applyNodeWorldTransform`，会把新的局部 T/Q/S 写回 `obj.position`/`.quaternion`/`.scale`；`TransformControls` 每帧在自己的 `updateMatrixWorld()` 里读 `this.object.matrixWorld` 重算 gizmo 应该画在哪（r166 源码原有行为，不是这次新加的），**不需要为这个方向另外写任何代码**，gizmo 会在下一帧自动跟到新位置。两个方向都用真实事件驱动验证过（gizmo 方向：真实鼠标拖拽后读数值框 DOM 值；数值面板方向：`page.fill()`+触发 `.trs-edit-row` 的 `focusout` 提交后读 `transformControls.worldPosition`）。
+- **拖拽中的选中框**：`nodeSelectHelper`（§6.1 的 `Box3Helper`）不会自动跟着被拖拽对象走——`Box3Helper` 每帧自己读 `this.box` 重算位置/尺寸，但 `box` 的边界值要有人主动喂新值才会变。新增 `updateNodeSelectHelperBox()`，挂在 `transformControls.addEventListener('objectChange', ...)`（拖拽过程中每次改动都会触发）上，拖拽时选中框会跟着实时收紧/移动，不会跟被拖拽物体脱节。
+
+### 19.5 已知限制：非均匀父级世界缩放 + 偏离缩放主轴的旋转
+
+**这不是这次新写的 gizmo 代码引入的 bug，是 §14 定下、§16.1（#29）已经记录过一次的"世界空间 T/R/S"模型本身的固有数学局限，这次验证过程中用真实拖拽复现了一次，如实记录**：
+
+如果一个节点的父节点自身世界缩放不均匀（比如 `画稿飞扬v2.glb` 里 `node_5`，世界缩放 `[4.4366, 4.4366, 1.0000]`——X/Y 一致但 Z 明显不同），对它的子节点做一次不沿缩放主轴的旋转（比如绕 X/Y 轴转较大角度），父级非均匀缩放 + 子级旋转复合出来的世界变换矩阵会带**剪切（shear）分量**，`Matrix4.decompose()` 无法精确还原出一个"纯旋转"分量，只能给出近似值——用 gizmo 拖拽 Y 轴旋转环转了约 41° 后，独立交叉验证（四元数夹角）显示约 34° 的偏差。
+
+**验证过程中额外做的诊断，证明这不是 gizmo 专属问题**：换回同一个节点（`L6`），完全不碰 gizmo、直接调用跟数值面板输入同一个函数 `applyNodeWorldTransform(4, T, [35,0,0], S)`（模拟用户在 #17/#29 数值面板里手动输入 X 轴旋转 35°），一样复现出约 33° 的偏差——证明这是共享写回函数本身的特性，gizmo 只是新增了一种更容易踩中它的输入方式（用户很少会在数值面板里手动敲一个偏离缩放主轴的角度组合，但拖拽旋转环时很自然会转到任意角度）。换一个父节点世界缩放均匀的节点（`PArc864`，父节点缩放 `[2.3647,2.3647,2.3647]`）重复同样的 gizmo 拖拽流程，四元数交叉验证误差精确为 `0.00°`——证实"父级缩放均匀"是问题的边界条件，不是 gizmo 拖拽输入方式本身不精确。
+
+**没有在这次任务里修**：修正这个问题需要重新设计"世界空间旋转"在非均匀缩放父级下的定义方式（比如改成记录/编辑"局部旋转"而不是"世界旋转"，或者引入显式剪切分量），是明显更大的一块工作，超出这次任务范围（任务要求"复用§14已有的换算逻辑，不要另起一套"），如实记录、留给以后有真实需求时再评估。真实样品里大多数节点父级缩放是均匀的（`画稿飞扬v2.glb` 26 个节点里只有 `node_5`/`node_25` 两个父级缩放不均匀），这个限制的实际触发概率不高。
+
+### 19.6 验证
+
+测试脚本：`_dev/test-todo33-gizmo.js`（Playwright，54 项断言全部 PASS，可重跑复查）。真实样品 `C:\Users\Lin\Desktop\Glb\画稿飞扬v2.glb`（20 材质、9 贴图、26 节点的密集展台场景）。**全程用真实鼠标 `page.mouse.move`/`.down()`/`.up()` 事件序列驱动 gizmo 拖拽，没有走捷径直接调内部函数**——轴手柄的屏幕坐标不是手算的（gizmo 尺寸随相机距离自动缩放，手算容易算错），是在页面上下文里现场用 `THREE.Raycaster` 从投影中心螺旋展开搜索，直到真的命中该轴的 picker mesh 为止，拿到这个真实屏幕坐标后才交给 Playwright 的 `page.mouse` API。
+
+覆盖：① 新工具条骨架（四个互斥模式按钮+分隔线+两个占位动作按钮，默认选择模式）；② 视口点击选中节点（真实 down/up 序列，命中节点跟独立预测一致，自动切到模型块 Tab）；③ 移动模式 gizmo 正确挂到选中节点；④ 真实拖拽 X 轴箭头——`OrbitControls.enabled` 在按下瞬间变 `false`、拖拽全程相机位置/target 不变、松手恢复 `true`；写回后用**两条完全独立的路径**交叉验证世界坐标（纯 JSON 手写父链累乘 `rawWorldTR()`，等价于测试脚本自己重新实现一遍 `nodeWorldMatrix()` 但不调用被测代码一行；vs. 从 three.js 真实 `obj.matrixWorld` 出发除掉 `model.matrixWorld`（`preprocess()` 整体归一化）反推"raw glTF 空间"世界矩阵，这条路径完全经过 three.js 引擎自己的矩阵传播，不调用 `nodeWorldMatrix`/`rawWorldTR` 任何一行）——两条路径误差 `1e-14` 米量级；⑤ 数值面板→显示拖拽后的世界坐标（gizmo→面板同步）；⑥ 撤销一步精确回到拖拽前（`raw.nodes[4]` 逐值核对）；⑦ 数值面板输入新坐标后 `obj.position`/gizmo `worldPosition` 精确跟着变（面板→gizmo 反向同步）；⑧ 旋转模式真实拖拽旋转环（父级缩放均匀节点，四元数夹角交叉验证误差 `0°`）+ 撤销；⑨ 已知限制复现（见 19.5）；⑩ 缩放模式真实拖拽缩放手柄（真实 gizmo，非简化版），交叉验证误差 `1e-19` 量级；⑪ `transformControls` 是 `scene` 直接子对象、不在 `model` 子树里（导出天然排除）；⑫ 控制台全程 0 报错。
+
+另重跑既有回归测试确认没有破坏已有功能：`test-viewport-tools.js`（21 项 PASS）、`test-undo-status.js`（29 项 PASS）、`test-todo29.js`（43 项 PASS，含它自己那条"新父节点缩放不均匀"已知限制的独立验证，跟 19.5 是同一类现象在不同功能上的表现）、`test-bbox.js`（全 PASS）——`test-highlight.js`/`test-scene-menu.js` 撞上 #26 已经记录在案、与这次改动无关的既有问题（`#texPreviewOverlay` 拦截点击），如实记录不是这次引入的回归。
+
+截图：`_dev/shots-33/00` 至 `06`（新工具条骨架、gizmo 挂载、拖拽中/后的移动/旋转/缩放三种手柄、数值面板反向同步）。调试钩子：`window.__debugGizmo = { transformControls, editMode, setEditMode, raycastNodeAt, gizmoTargetWorldTR, syncGizmoToSelection, model }`。
+
+### 19.7 视口新工具条：动作组（包裹框/中心点/导出）接上行为（对应 `Doc/TODO.md` #34，§17.4 决策记录第1、2点，2026-08-07 完成）
+
+**背景**：§19.2 搭好的下半组「⬚包裹框」「⊕中心点」两个按钮当时只是视觉骨架，刻意没有绑 `onclick`（留给这次任务，避免代理间冲突）。这次接上行为，并按决策记录第1点要求新增了第三个「导出」按钮。三个都直接在 `#modeBboxBtn`/`#modeCenterBtn` 这两个既有按钮上接 `onclick`，没有重新建一套新按钮；`#modeExportBtn` 是新增的第三个，跟前两个共享同一套 CSS/DOM 结构。
+
+**三个都不是模式按钮**——跟上半组「选择/移动/旋转/缩放」四选一的持久互斥态不同，这三个是点一下就执行一次的动作，不维护「选中/激活」状态。视觉反馈交给原生 CSS `:active`（按下瞬间文字变 `--accent`、背景变 `--panel2`，松手恢复），没有额外的 JS 状态维护；没有选中节点时通过 `button.disabled` 禁用（`syncModeActionButtons()`，挂在 `setNodeSelection()`/`clearNodeSelection()` 两处状态变化点，跟 `syncGizmoToSelection()` 同一个收敛模式），三个按钮的 `onclick` 内部也各自保留一次 `selectedNodeIdx === null` 的防御性判断+`status()`提示，应对「disabled 被绕过」的边界情况（比如测试脚本直接调 `.onclick()`），不会报错。
+
+**「导出」按钮**：`exportSelectedNode(ni)`——§6 已有的函数，一行没改，直接复用。点击立即触发浏览器下载（没有面板，导出选中节点这个动作在 §6 里从来就没有中间态面板，符合决策记录第2点"直接执行"的精神——只是这个动作恰好没有"结果面板"可展开）。
+
+**「包裹框」按钮**：`openBBoxPanel(ni)`——§9 已有的函数，一行没改。没有 bbox 时内部先调 `generateBBox(ni)`（按节点世界空间旋转角生成默认定向包围盒）再打开编辑面板；已有 bbox 时直接打开编辑，不重新生成（不会冲掉用户手动改过的角度）。跟模型块 Tab 详情区（§6.2）原有的「⬚ 包围盒」按钮是**同一个函数、两个入口**，行为逐字节一致，不是照着抄一份。
+
+**「中心点」按钮——决策记录第1点原话「两者都要，并且显示告诉用户基点在哪里。并且可以编辑，保存」**：
+
+新增居中浮层 `#centerPointOverlay`/`#centerPointPanel`，外壳（Overlay/Panel/PanelHead/Body 四层结构、尺寸/间距/配色）直接照抄 `#bboxOverlay` 那一套，没有发明新样式。内容三块，同时呈现在同一个面板里，不是切换式的两个模式：
+
+1. **关联到已有基点**：一个 `<select id="cpBasepointSel">` 下拉框，选项是「（不关联，用默认）」+ 全部 `anno.basepoints`。选中后直接写 `nodeAnno(targetName).basepointRef`——`targetName` 用 `resolveNodeRowTarget(ni)` 解析（§6.2 合并行挂载点规则），跟节点表「关联基点」列（`data-bpref`）走的是完全同一套数据结构和写回逻辑，只是这次画在浮层里而不是表格行内。
+2. **以当前节点位置新建基点**：新函数 `addBasepointAtNode(ni)`——position 取该节点当前的世界坐标（`nodeObjects.get(ni).matrixWorld`，跟 §8 全篇「基点位置用 `nodeObjects` 这套归一化后坐标系」的既有取舍一致），zRotation 固定给 0°（决策记录原文只要求"以当前选中节点的世界坐标位置新建"，没提朝向要不要对齐节点旋转，延续 `addBasepoint()` 手动新增时 `zRotation` 默认 0 的既有约定）。**新建完自动把当前节点关联到这个新基点**——这是本次任务里做的一处产品判断：面板打开的初衷就是"给这个节点配一个基点"，新建了却不关联，用户还要再手动去下拉框选一次，多一步没有必要，如实记录在这里（不是决策记录逐字要求的，是延伸出的合理默认行为）。
+3. **常驻显示当前生效基点的可读位置 + 直接编辑保存**：`effectiveBasepointForNode(targetName)`（§8 已有的 fallback 规则：显式关联就用那个，没关联就退到场景第一个基点）算出"当前生效基点"，面板下半部分常驻显示它的 X/Y/Z/朝向° 四个 `<input type="number">`，不是只有一个选择器看不到数值。这四个输入框的 `onchange` 直接调 `updateBasepointPos`/`updateBasepointRot`——跟「场景」Tab 基点列表里对应输入框调用的是**完全相同的函数**，写回 `anno.basepoints[idx]`，视口橙色标记通过这两个函数内部已有的 `syncBasepointHelpers()` 自动跟着重画，没有为中心点面板另外接一遍视口同步逻辑。没有任何基点时（`anno.basepoints` 是空数组），位置区域隐藏、改显示提示文案引导去新建。
+
+**一处必要的既有函数微调（`refreshBasepointUI()`）**：`updateBasepointPos`/`updateBasepointRot`/`addBasepoint`/`addAutoBasepoint`/`deleteBasepoint`/`updateBasepointName` 这六个 §8 已有的基点写回函数，原本结尾统一硬编码 `renderTab('scene')`——这在 #34 之前是对的（基点的增删改此前只能从「场景」Tab 自己触发，那一刻 `currentTab` 本来就是 `'scene'`）。这次新增的中心点面板是第二个入口，可以在「模型块」Tab 打开（选中节点、点视口工具条「中心点」按钮），如果还硬编码 `renderTab('scene')`，会在用户毫无预期的情况下把右侧面板切到「场景」Tab。改成 `refreshBasepointUI()`——按 `currentTab==='scene'` 判断要不要重渲染场景 Tab，另外只要 `#centerPointOverlay` 没隐藏就重渲染中心点面板（`renderCenterPointPanel()`）。这是对这六个函数收尾行为的最小必要调整，写回逻辑本身（`bp.position[axis] = ...; saveAnno(); syncBasepointHelpers();`）一行没动，符合任务要求的"复用§8已有的写回函数，不要另起一套"。
+
+**基点创建逻辑顺带抽了一层公共函数** `createBasepoint(position, zRotation, namePrefix, source)`——`addBasepoint()`（场景 Tab「＋新增基点」）、`addAutoBasepoint()`（场景 Tab「⟲生成默认基点」）、`addBasepointAtNode()`（中心点面板「＋新建基点」）三处共用同一段 `push+saveAnno+syncBasepointHelpers` 逻辑，不各自重写一遍；三者的差异只在传给它的 position/zRotation/namePrefix/source 参数不同。
+
+**CSS 类名踩坑记录**：中心点面板里常驻显示位置的那一行，最初直接复用了「场景」Tab 基点列表用的 `.bp-row` 类（视觉上是同一套横排+wrap+输入框样式），实测跑 `test-basepoints.js` 时发现它断言 `document.querySelectorAll('.bp-row').length === 2` 之类的精确行数——中心点面板一旦打开，这行常驻元素也会被计入，导致既有断言错误地多算 1 行，`page.waitForSelector('.bp-row')` 也会因为优先解析到这个（可能是 `hidden` 的）浮层内元素而超时。改成新类名 `.cp-row`，跟 `.bp-row` 的共享样式声明（`input[type="number"]`/`input[type="text"]` 的尺寸/聚焦描边）合并成 `.bp-row, .cp-row { ... }` 选择器同时命中两者——视觉规则仍然只声明一份、没有复制一份数值，但 DOM 查询不会再互相污染。
+
+**验证**：`_dev/test-todo34-actions.js`（Playwright，50 项断言全部 PASS，可重跑复查）。真实样品 `C:\Users\Lin\Desktop\Glb\画稿飞扬v2.glb`。覆盖：① 未选中节点时三个按钮 `disabled`，绕过 `disabled` 强行调 `onclick` 也只弹状态栏提示、不报错、不开面板；② 选中节点后三个按钮启用；③ 「导出」触发下载，导出 GLB 的 `meshes`/`materials` 数量精确等于该节点子树依赖收集的预期值（多 primitive 网格节点会被 `GLTFExporter` 拆成多份独立 mesh 条目，跟 §6 已经记录过的既有行为一致，测试脚本按 primitives 数而不是 raw mesh 索引数计算预期值）；④ 「包裹框」没有 bbox 时点击直接生成默认值+自动展开编辑面板；手动改旋转角后再次点击「包裹框」按钮确认是直接打开编辑、没有重新生成把手动改过的角度冲掉；⑤ 「中心点」面板打开，关联下拉框选项数=基点数+1，面板显示的 X/Y/Z/朝向°精确等于该基点当前值；⑥ 「以当前节点位置新建基点」——新建的基点世界坐标用**跟被测代码完全独立的纯 JSON 父链累乘**（`window.rawWorldTNormalized`，自己重新实现一遍矩阵乘法，不调用 `nodeObjects`/`addBasepointAtNode` 内部任何一行，另外还要再乘一次 `model.matrixWorld` 才能对齐 §8 的归一化坐标系，测试脚本自己独立算出这个换算关系）重新算一遍核对，容差 1e-3 米内精确匹配；新建后自动关联当前节点到新基点；⑦ 编辑面板里的 X/朝向° 输入框改值后，`anno.basepoints[idx]` 精确更新，视口橙色基点标记的位置和朝向四元数（跟 `zRotation` 对应的世界 Y 轴旋转角独立算出的四元数交叉核对）同步刷新；⑧ 「场景」Tab 的基点列表能看到中心点面板新建/编辑过的同一条记录（同一份 `anno.basepoints` 数据，两处 UI 一致）；⑨ 面板关闭（点「关闭」按钮 / 点外部背景）两种方式都测到；⑩ 控制台全程 0 报错。另重跑 `test-todo33-gizmo.js`（54 项 PASS，同步更新了其中一条断言——下半组按钮数量从 2 个占位按钮变成 3 个真正可用按钮，`['bbox','center']` 改成 `['bbox','center','export']`）、`test-basepoints.js`（全 PASS）、`test-bbox.js`（全 PASS）、`test-todo30-basepoint-source.js`（全 PASS）确认没有破坏 #33/#8/#9 的既有功能；`test-instance-export.js` 跑到「另存为GLB」那一步撞上 #21 遗留的旧按钮 ID `#exportGlbBtn`（`Doc/TODO.md` #22/#13 报告已经反复记录过的既有问题，跟这次改动无关），在撞上之前 Instance 创建/mesh 索引校验等核心逻辑全部正常通过。测试脚本：`_dev/test-todo34-actions.js`。截图：`_dev/shots-34/00` 至 `04`。调试钩子：`window.__debugModeTools = { syncModeActionButtons, openCenterPointPanel, renderCenterPointPanel, addBasepointAtNode, createBasepoint, refreshBasepointUI, centerPointNi }`。
+
+---
+
+## 20. 响应式：三档断点 + 横屏规则（对应 `Doc/TODO.md` #38，§17 Round 2/3 §04，本轮 #31-38 批次最后一项，2026-08-07 完成）
+
+**背景**：README/SPEC 原来只记了一条响应式规则——「< 900px 时上下分栏」，对应 `index.html` 里唯一的 `@media (max-width: 900px)` 块（`main{flex-direction:column}` + `#panel{width:100%}` + `#viewport{height:40vh}`）。这次任务要求在这条基础上加两档：`<600px` 手机竖屏进一步收紧、独立的横屏规则（`max-height:500px`，强制左右分栏）。**开工前先搜了 index.html 有没有残留实现**——只有这一条 900px 规则，没有任何 600px/横屏相关的媒体查询残留，是干净状态，从这条既有规则上继续加，不是推倒重来。
+
+### 20.1 走查方法：先截图找真实问题，不是「不分青红皂白全局缩小」
+
+用 Playwright + 真实样品 `画稿飞扬v2.glb`，在写任何新 CSS 之前先在 6 组视口尺寸（1280×800/768×1024/375×667/320×568/812×375/1024×400）跑一遍现状截图 + DOM 几何检测（水平溢出量、header 子元素越界量、`#modeTools`/`#panel` 是否重叠），照走查结果定位真实存在的问题，而不是猜。走查发现两个真实 bug（不是这次改动引入的，是既有代码的问题，这次任务顺手一起修了）：
+
+1. **`#panel` 缺 `min-height:0`，纵向内容在窄屏下超出视口却无法滚动到**：`#panel` 在 `main{flex-direction:column}` 生效后变成纵轴（高度方向）flex 子项，没有 `min-height:0` 时它的"自动最小尺寸"由内容撑开决定——实测 700×900 视口下 `#panel` 实际高度被撑到 794px、底部落在 y=1259，远超视口 900px 高度，而 `html`/`body` 又是 `overflow:hidden`，超出的部分既看不到也没法滚动到。这意味着**「< 900px 上下分栏」这条现有规则，从它存在的第一天起就没有真正跑对过**——下方节点/材质列表内容一旦超过一屏，剩下的部分对用户来说是彻底不可达的，不是"需要滚动才能看到"而是"永远看不到"。补一行 `#panel { min-height: 0; }` 后，滚动交给内部 `#tables`（本来就是 `flex:1` + `min-height:0` + `overflow-y:auto`）正确处理，两层 nested flex 现在都遵守同一条收缩规则。**这条修复不算是新增响应式行为，是让"现状规则"名副其实地生效**，任务里"600-900px 确认还生效、不用重写"这条要求因此不是空话。
+2. **`header` 8+ 个按钮/菜单一字排开，窄屏下会被压缩到内部文字被迫二次换行，把 `header` 高度顶起来几倍**：实测 375px 视口下 `header` 高度被顶到 165px（正常 ~44px），把下面视口/面板都往下挤；进一步走查发现这不只是 <600px 的问题——812px 宽度（横屏尺寸）下 header 总内容宽度跟容器只差几像素，同样会在某个按钮内部触发文字二次换行，把 header 顶到 80px 高（正常情况的近两倍），侵占横屏本来就紧张的可视高度。**修复本体（`header{flex-wrap:wrap}` + `header>*{white-space:nowrap}`）没有放在某个特定宽度断点里，而是提到了 `header` 的基础规则**——这条规则只在内容真放不下时才生效（内容够宽时保持单行，不会平白无故多出一行），实测桌面 1280px 宽度下没有副作用，所以不需要用媒体查询限定它的生效范围。效果是"放不下的整个按钮挪到下一行"而不是"按钮内部文字断行"，行为更可控，也正好是任务要求的「操作按钮从横排改自动换行」在 header 这个具体位置的体现。
+
+### 20.2 三档断点实现
+
+- **≥900px**：现状桌面布局，视口+右侧面板左右分栏——没有对应的媒体查询，默认状态就是，不用改。
+- **600-900px**：`@media (max-width: 900px)` 这条既有规则原样保留（`main{flex-direction:column}` + `#panel{width:100%;flex:1}` + `#viewport{height:40vh}`），只补了上面 20.1 第 1 点的 `min-height:0` 修复。
+- **<600px（手机竖屏）**：新增 `@media (max-width: 600px)` 块，在 600-900px 规则基础上进一步收紧，走查后确定收紧了三类真实存在的问题（不是全局无差别缩小）：
+  1. **header**：基础规则已经解决了"内容顶高"这个结构性问题（见 20.1），这里只是在 <600px 进一步压缩 `padding`/`gap`，另外把 `.spacer`（原本用来把右侧按钮推到最右边）在 <600px 隐藏——因为一旦 header 换行成多行，spacer 的"撑开推右"语义在窄屏下没有意义，独占一行反而浪费纵向空间；`header .file`（文件名）超长时 `max-width:96px` + 省略号截断，避免单独把 header 撑得更宽。
+  2. **居中浮层固定宽度面板**（材质说明/清理菜单/设置/重放/服务器项目/上传结果/包围盒/中心点/贴图删除/各种 ⓘ 说明弹窗，共 12 个 `id`）：全部原本是固定 px 宽度（340-480px），在 320-375px 视口下比视口本身还宽——这些浮层的外壳都是 `position:fixed;inset:0;display:flex;align-items:center;justify-content:center` 居中容器，不会裁切子元素，超宽的面板会左右两边一起探出视口，物理上不可见也点不到（用 `document.elementFromPoint` 验证过顶层命中元素确实会是别的东西）。统一加 `width:92vw;max-width:92vw`，跟原本各自的 `width:XXXpx` 是同一个 ID 选择器特异度、后声明覆盖前声明，不用 `!important`。
+  3. **数值面板/表格**：`.node-detail`/`.mdh`/`.mf-row`/`.trs-edit-row` 的内边距和间距收紧一档；`.trs-group input[type="number"]` 宽度从 56px/92px（S 缩放框）收窄到 46px/74px，减少 T/R/S 九个输入框在窄面板里挤出太多换行；表格 `td`/`th` 内边距、字号跟着降一档。
+  4. **`#modeTools`/`#viewTools` 新工具条**：图标按钮 `padding`/`font-size` 也收紧一档（详见 20.3，属于"顺手做"，不是发现了遮挡才补的）。
+
+  **`.node-detail-actions`/`.tex-detail-actions` 这类操作按钮组本来就已经是 `flex-wrap:wrap`**（`Doc/TODO.md` #17/#26 就这么写的），这次任务要求的「操作按钮从横排改自动换行」这条在这两处不需要新增代码，是现状已经符合；这次只是在 <600px 下把它们的按钮 `padding`/`font-size` 也收紧了一点，减少不必要的挤压换行。
+
+### 20.3 横屏规则：`@media (max-height: 500px)`，独立于宽度断点
+
+**核心问题**：横屏时如果沿用「<900px 上下分栏」，`#viewport` 会被 `height:40vh` 砍掉一半还多——手机横屏可视高度本来就只有 350-400px 左右，40vh 只剩 140-160px，3D 视口小到没法用。横屏应该反过来优先保证视口可视高度，面板收窄成固定宽度侧栏挪到旁边，这跟窄屏竖屏规则的诉求（"横向空间紧张，纵向随便"）正好相反。**这条规则只判断 `max-height`，完全不看宽度**，所以是跟 <600px 规则正交的一条独立规则，不是同一个断点体系里的分支。
+
+```css
+@media (max-height: 500px) {
+  main { flex-direction: row; }
+  #panel { width: 300px; max-width: 42vw; min-width: 200px; flex: 0 0 auto; height: auto;
+    border-left: 1px solid var(--line); border-top: none; }
+  #viewport { flex: 1; height: auto; }
+  header { padding: 6px 12px; }
+  header h1 { font-size: 11px; }
+}
+```
+
+`#panel` 宽度用 `width:300px` + `max-width:42vw` + `min-width:200px` 三者组合（不是单一固定值）：常规横屏宽度（812/1024px）下生效的是 `300px`，极窄横屏（比如老式手机横屏 480px 宽）时 `max-width:42vw` 接管防止面板吃掉太多本来就不多的横向空间，`min-width:200px` 兜底面板不会窄到按钮点不了。
+
+**写在 `<style>` 块最后一条媒体查询是故意的，不是随手放的位置**：横屏矮屏幕如果宽度恰好也 <600px（比如竖着拿的老式横屏手机），会同时命中 `max-width:900px`/`max-width:600px`/`max-height:500px` 三条规则，三条对 `main`/`#panel`/`#viewport` 都覆盖了同一批属性（`flex-direction`/`width`/`height`/`flex`）。CSS 里选择器特异度相同时（这里三条规则里对应选择器都是同样的 `main`/`#panel`/`#viewport` 元素/ID 选择器，特异度一致）后声明的规则赢——横屏规则排最后，就能保证"横屏优先于宽度断点"生效，不需要 `!important` 这种更粗暴的手段，任务原文明确要求了这个优先级关系，这是实现它的具体方式。
+
+### 20.4 `#modeTools`/`#viewTools` 新工具条在窄屏/横屏下的位置验证
+
+**结论：不需要额外的收起/展开交互，工具条本来就贴视口边缘，天然不会被面板遮挡**——验证下来是"测了确认没问题"，不是"猜没问题就跳过验证"：
+
+- `#modeTools`（右）/`#viewTools`（左）都是 `position:absolute` 挂在 `#viewport` 内部（不是挂在 `main`/`body` 上），`top:12px`，左右分别 `left:12px`/`right:12px`。只要 `#viewport` 和 `#panel` 是两个不重叠的兄弟元素（横屏左右分栏、竖屏上下分栏都满足这一条），两个工具条就永远只会出现在 `#viewport` 自己的矩形范围内，物理上不可能跟 `#panel` 重叠——这是布局结构决定的，不依赖某个具体断点的像素调优。
+- **横屏是这次唯一有风险的场景**（宽度分栏时 `#viewport` 变窄，理论上工具条可能被挤到跟 `#panel` 太近甚至重叠）：实测走查过程中确实在**加横屏规则之前**的过渡状态下抓到过一次 `#modeTools` 跟 `#panel` 重叠（812×375 视口下，套用旧的 900px 断点导致 `#panel` 定位异常），但那是"横屏误用了竖屏规则"这个问题本身的症状，不是工具条设计有缺陷——20.3 的横屏规则实现后，`#viewport`/`#panel` 变回两个正常并排的矩形，重叠随之消失，用 Playwright 矩形相交检测复核过 6 组视口全部 `false`（不重叠）。
+- 命中测试：`document.elementFromPoint()` 验证 `#modeTools` 每个按钮中心点，顶层元素就是按钮自己，6 组视口下全部通过——不只是"没有几何重叠"，是"确认真的点得到"。
+- <600px 下按 20.2 第 4 点把工具条按钮 `padding`/`font-size` 顺手收紧了一档（`#viewTools button` padding 6px 11px→5px 8px，字号不变；`#modeTools button` padding 7px 9px→5px 7px，字号 14px→12px），这是"顺手让极窄视口下的点击热区更协调"，**不是因为发现了遮挡问题才做的补救**，如实记录区分开这两种性质不同的改动。
+
+### 20.5 验证
+
+测试脚本：`_dev/test-todo38-responsive.js`（Playwright，58 项断言全部 PASS）+ `_dev/test-todo38-overlay-panels.js`（12 项断言全部 PASS，专门测居中浮层面板的 `max-width:92vw` 兜底）。真实样品 `C:\Users\Lin\Desktop\Glb\画稿飞扬v2.glb`。覆盖 6 组视口（1280×800 桌面 / 768×1024 中间档 / 375×667 与 320×568 手机竖屏 / 812×375 与 1024×400 横屏矮屏），每组视口验证：① `main` 的 `flex-direction` 精确匹配该档位预期（横屏 `row`、竖屏中间/手机档 `column`、桌面 `row`）；② 横屏面板宽度 <60% 视口宽、视口高度保住 >55% 可视高度（对照修复前"上下分栏"规则被误用时视口只剩 40vh 的旧行为，是明显改善，55% 这个阈值不是硬性产品指标，是"证明比旧行为好得多"的检验线）；③ `document.documentElement.scrollWidth <= window.innerWidth`（无水平溢出）；④ header 全部直接子元素完整落在视口宽度内（换行到第二行允许，任何单个子元素超界不允许）；⑤ `#modeTools`/`#viewTools` 跟 `#panel` 矩形不相交 + 全部按钮 `elementFromPoint` 命中测试；⑥ 切换材质/贴图/模型块/场景四个 Tab，模型块 Tab 选中节点、材质 Tab 选中材质卡片，详情区展开后都不引发新的水平溢出；⑦ 居中浮层面板（设置面板）完整落在视口内（`left>=-1 && right<=winW+1`）；⑧ 控制台全程 0 报错。截图：`_dev/shots-38/`，每组视口存了整体全览（`-00-overview`）、模型块详情区（`-01-node`）、材质详情区（`-02-mat`）三张，另外 `-settings-overlay.png` 单独证明浮层面板 max-width 兜底生效。
+
+**过程中一个需要说明的测试细节，如实记录**：验证脚本切换 Tab 并点击材质卡片后再打开设置面板这个动作序列里，`#settingsBtn` 的点击一度被拦截——诊断确认拦截它的是 `#texPreviewOverlay`（材质大图预览浮层），这是 §19.6 已经记录在案、与本次改动无关的既有问题（点击材质卡片会意外让贴图大图预览浮层保持可交互状态，挡住后续点击）。为了不让这个已知问题干扰响应式验证的结论，`test-todo38-overlay-panels.js` 单独跑一遍干净流程（只加载模型直接点设置按钮，不经过材质卡片点击），12 项全部 PASS，证明浮层面板本身的响应式行为是正确的。
+
+**回归测试**：重跑 `_dev/test-todo33-gizmo.js`（54 项 PASS）、`_dev/test-viewport-tools.js`（全 PASS）、`_dev/test-todo36-nodetab.js`（35 项 PASS）、`_dev/test-todo37-scenetab.js`（82 项 PASS）、`_dev/test-undo-status.js`（29 项 PASS），确认这次的 CSS 改动（尤其是 `header`/`#panel` 两条基础规则的调整）没有破坏桌面尺寸下的既有功能。
+
+---
+
+## 21. GLB 解包导出（glTF 分离格式）+ 相机视角卷展栏（口述需求记录，2026-08-08，已确认，待排期）
+
+**原话**：「另外我理解glb是个包。能否导出素材和glb里其他信息呢？在菜单里增加。另外在左上角视图区域增加相机卷展览可以新建和存储/删除重命名视角。当然折叠在菜单内部。」
+
+用户对两条需求里的关键歧义点已经逐条确认（见下），不需要再澄清，可以直接排期。
+
+### 21.1 GLB 解包导出（glTF 分离格式）
+
+**确认结论**：不是简单扩展 #41 的贴图批量导出，而是把当前 GLB **解包成标准 glTF 分离格式**——`.gltf`（JSON 文档）+ `.bin`（几何/动画等二进制缓冲区）+ 全部贴图文件，一个文件夹或 zip 打包整体下载。这正好是 `CHANGELOG.md` v0.1.0 起一直标注的已知限制「不支持 glTF 分离格式（.gltf + .bin + 贴图文件夹）」的**反方向**——原来那条限制说的是"不能读入分离格式"，这次要做的是"能导出成分离格式"，是两件事，不冲突，但导出这条做成了之后，理论上也顺带验证了分离格式本身这套三件套数据结构是不是正确、可以为以后"读入分离格式"打基础。
+
+**技术要点（待实现时细化，这里先记落地方向）**：
+- 数据来源：`raw`（= `gltf.parser.json`，已加载模型的完整 glTF JSON）里的 `buffers`/`bufferViews`/`images` 等，加上视口当前实际编辑状态（跟「另存为 GLB」§3 一样，要反映用户已经做的全部编辑，不是原始加载时的快照）——最简单可靠的路径是复用 §3 已有的 `GLTFExporter.parse()` 得到最新的 GLB 二进制，再把这份 GLB 按 §17.1 已经验证过的 GLB chunk 结构（12字节头+JSON chunk+BIN chunk）**手动拆包**：JSON chunk 直接存成 `.gltf`（改写内部 `images[].bufferView`/`uri`/`buffers[].uri` 等引用指向拆出来的外部文件，不能保留原来指向内嵌 BIN chunk 的写法）、BIN chunk 存成 `.bin`（`buffers[0].uri` 指向这个文件名）、每张贴图各自单独存成文件（`images[]` 从 `bufferView` 引用改成 `uri` 指向对应文件名，去掉多余的 `bufferView`/`mimeType` 就着这层改动一起处理）。
+- 打包成 zip 还是文件夹：参考 #41 的选型讨论（本项目至今没有非 three.js 的 vendor 依赖），如果要 zip 需要引入打包库；如果嫌加依赖麻烦，也可以用「逐个触发浏览器下载」这个 #41 已经用过的零依赖方案，让用户自己建文件夹放在一起——实现时再判断，不是这次要求的强制项。
+- 入口位置：用户原话是「在菜单里增加」——放进现有「另存为 GLB ▾」下拉菜单（跟「本地文件」「保存到服务器」并列一个新选项，比如「解包为 glTF（.gltf+.bin+贴图）」），不需要新开一个菜单入口。
+- 多模型场景（#39）下，默认针对 `activeModel`（当前正在编辑的模型），不强制要求支持"打包全部已加载模型"。
+
+### 21.2 相机视角卷展栏
+
+**确认结论**（三点待确认，已逐条问清）：
+1. **视角字段**：不只是位置+看向目标点（跟现有 4 个预设视角一样的两个向量），还要记录**视野/缩放**等参数——具体对应 three.js `PerspectiveCamera` 的 `fov`（视野角度）和 `zoom`（如果用到），加上 `OrbitControls` 当前状态需要的话一并记（比如 `target`），做到"应用这条保存的视角后，画面精确复现保存时的样子"，不是只恢复个大概位置。
+2. **归属范围**：**每个模型各自独立一份**，跟 #39 多模型架构、§8 测量基点、§9 包围盒等标注数据同一个存储层级——存进当前激活模型的 `anno`（比如 `anno.cameraViews`，数组，每项 `{name, position, target, fov, zoom, ...}`），切换模型（#39 模型切换器）时这份列表要跟着换成新激活模型的。
+3. **UI 位置与形态**：视口左上角现有的视角工具条（正视/侧视/顶视/默认 4 个按钮）**旁边或下方**增加入口，具体交互原话明确是「折叠在菜单内部」——默认收起，不常驻占用视口空间，点开才展开列表（可以是一个小箭头/图标触发的下拉，或者卷展栏 `<details>`，具体选哪种排期时定，参考 §17.3 场景 Tab 元数据卷展栏已经用过的模式，不用发明新组件）。展开后的列表要支持：**新建**（保存当前相机位置成一条新记录）、**应用**（点某条记录切回那个视角）、**重命名**、**删除**——四个操作原话都点到了，不能只做新建+应用。
+
+### 待实现范围内的小判断（不阻塞排期，实现时按此执行，不必再问）
+
+- 「解包导出」优先保证正确性（导出后的 `.gltf`+`.bin`+贴图三件套要能被本工具自己重新打开验证往返正确，或者至少能过 glTF 官方校验工具的语义检查），打包成 zip 还是逐个下载看实现时的权衡，不是这次决策的重点。
+- 「相机视角」的默认命名（新建时如果用户没输入名字）可以参考基点系统 §8 已有的"默认基点"/"默认基点2"防重名逻辑，不用另外发明一套。
+- 两条需求互相独立，可以并行排期，没有依赖关系。
+
+### #42 实现记录（GLB 解包导出，2026-08-08 完成，§21.2 相机视角卷展栏未在这次范围内）
+
+**开工前先搜了一遍 `index.html`**：「解包」「分离格式」「unpack」全部无匹配，没有任何残留实现，从零开始。
+
+**数据来源，跟 §3「另存为 GLB」同一条路径**：新增函数 `unpackGlbToGltf()` 第一步就是 `await exportGlbBlob()`——这是 §3 已有的 `GLTFExporter.parse(model, ..., {binary:true})` 包一层 Promise 的既有函数，跟「本地文件」「保存到服务器」两个既有菜单项共用同一份实现，一行没改。拿到的是反映当前编辑状态（材质改色/贴图替换/节点变换/Instance）的最新 GLB，不读 `raw`/`currentBuf`（原始加载快照）。
+
+**手动拆包**：新增 `splitGlbChunks(buf)`，跟既有 `findGlbBinChunkOffset()` 同一套 12 字节头 + chunk 循环的结构认知，区别是这次要把 JSON chunk 和 BIN chunk**整个**取出来（不是只要 BIN chunk 的起始偏移）——JSON chunk 用 `TextDecoder` 解成字符串再 `JSON.parse()`（这一步天然完成了"深拷贝"，改这份对象不会影响原始 `raw`），BIN chunk 保持 `ArrayBuffer` 不动。
+
+**`images[]`/`buffers[]`/`bufferViews[]` 改写逻辑（`convertGltfJsonToSeparate()`，本任务技术核心）**：
+
+- **文件名来源，一处返工**：任务描述原话是「文件名用 `images[i].name`」，但读 `vendor/exporters/GLTFExporter.js` 的 `processImage()` 源码确认这条路径导出的 `images[]` 条目永远只有 `{ mimeType }`，从来不带 `.name` 字段——这层信息实际落在引用这张图的 `textures[].name` 上（`textureDef.name = map.name`，而 `map.name` 又是 `GLTFLoader` 加载时用 `texture.name = textureDef.name || sourceDef.name || 原始uri` 这条既有规则设置的，见 `vendor/loaders/GLTFLoader.js` ~3223 行）。改成反查第一个引用这张 image 的 `textures[]` 条目取 `.name`，取不到才退回 `image_N`。真实样品验证下来 9 张贴图全部有名字（这份 GLB 原始导出工具自己写的 `texture_source1_sampler1` 这类名字），一次都没退回过 `image_N`，但代码保留了这条 fallback，不假设"一定有名字"。扩展名来自 `mimeType`（`image/png`→`png`、`image/jpeg`→`jpg`，`image/webp` 防御性映射到 `webp` 但实测走不到——`GLTFExporter` 内部已经把 webp 材质强制转码成 png 了）。
+- **重名防覆盖**：直接复用 #41 的 `dedupeExportFileName(name, usedCount)`，一行没改，`usedCount` 是这次解包生命周期内新开的 `Map`。
+- **`buffers[0].uri`**：`GLTFExporter` 二进制模式下这个字段原本是省略的（隐式指向 GLB 自己唯一的 BIN chunk），分离格式没有这层隐式关系，显式补上 `base + '.bin'`。`byteLength` 字段本来就等于 BIN chunk 整体大小，不用改。
+- **`bufferView` 清理策略（如实记录判断过程，这是任务描述点名要求"仔细处理"的部分）**：
+  1. 每处理一张 image，把它原来指向的 `bufferView` 下标记进一个候选删除集合 `imageBufferViewIdx`。
+  2. **不假设"这个 bufferView 只被这一个 image 用"**——显式反查全部 `accessors[].bufferView` + `accessors[].sparse.{indices,values}.bufferView`（还有防御性地反查一遍剩下的 `images[].bufferView`，应对理论上没转换成功的条目），建一个 `stillReferenced` 集合。只有在候选删除集合里、又不在 `stillReferenced` 里的下标才真正删除——真实样品验证：89 个 `bufferViews` 里精确有 9 个进了候选集合，这 9 个全部不在 `stillReferenced` 里（`GLTFExporter` 给每张贴图单独生成专属 `bufferView`，读 `processBufferViewImage()` 源码确认过不会跟其它数据共享），最终清理后剩 80 个，跟"89 − 9 = 80"精确对上。
+  3. 删除数组条目后，同步重新编号剩余 `accessors[].bufferView`/`sparse.*.bufferView` 的下标（`remap` 一个 `Map<旧下标,新下标>`）——这一步是必须的，不重新编号会让所有排在被删条目后面的 `accessor` 全部指错。
+  4. **`.bin` 文件本身不重新拼装缩小**——BIN chunk 整体原样落盘。删掉的 9 个 `bufferView` 曾经指向的那段字节仍然存在于 `.bin` 里，只是 JSON 层面已经没有任何 `bufferView`/`accessor`/`image` 指向那段范围，成了"没人读但字节还在"的死重量。**这是任务描述里明确允许的简化，不是偷懒没想到**：判断过重新拼一份最小化 buffer 需要处理"多个 bufferView 是否有重叠/共享同一段字节"这类额外的正确性风险（这次真实样品验证下来没有这种情况，但不能假设所有 glTF 都没有），权衡下来选择保留死重量、只清理 JSON 层引用——`.bin` 文件体积等于原 GLB 的 BIN chunk 整体大小，不会因为贴图被抽出去而变小，如实记录这条不是"完美最小化"方案。
+
+**打包方式：没有选 #41 讨论过的两个方案里的任何一个，是这次任务单独做的判断**——手写了一个只支持 STORE（不压缩）的最小 ZIP 打包器（`crc32()` 标准查表法 + `buildZipBlob()`，本地文件头/中央目录/EOCD 三段定长二进制结构，UTF-8 文件名标记位处理中文文件名）。理由：
+
+1. 这次导出的产物是「一整套包」——`.gltf` 里 `buffers[0].uri`/`images[].uri` 写死指向 `model.bin`/`images/xxx.png` 这些相对路径，必须精确对应磁盘上的文件位置，这套引用关系才成立。
+2. #41 的「逐个 `<a download>`」方案对这次不够可靠：多次导出之间，Chromium 自己的"文件已存在→自动加 (1)"重命名逻辑不受 `dedupeExportFileName()` 控制，会让实际落地文件名跟 `.gltf` 里已经写死的 `uri` 对不上；`<a download="images/x.png">` 虽然 Chromium 系浏览器支持在下载目录下建子文件夹，但落地位置固定是浏览器"下载"目录，不是用户这次想要的目标目录。
+3. 引入 JSZip 这类 vendor 库（#41 讨论过的另一个方案）能解决上面的问题，但会是项目第一个非 three.js 的通用工具库依赖；这次贴图数据本身已经是 PNG/JPEG 压缩格式，套一层 DEFLATE 收益很小，STORE-only 的 ZIP 格式规范本身很薄（没有压缩算法要处理，只有几个定长二进制结构体 + CRC32），手写风险可控，选了这条路——零新增 vendor 依赖，跟项目一贯的 build-free 立场同样成立，同时换来"uri 引用关系解压后 100% 精确成立"这条硬保证。
+
+**入口**：「另存为 GLB ▾」下拉菜单新增 `#saveGlbUnpackBtn`「解包为 glTF（.gltf+.bin+贴图）」，跟「本地文件」「保存到服务器…」并列，同一套 `saveGlbMenu` 交互。下载文件名 `<原文件名>.gltf-unpacked.zip`。默认只针对 `activeModel`（跟 #41 一样读模块级 `raw`/`model`，在 #39 harvest/apply 架构下天然只处理当前激活模型）。
+
+**验证（`_dev/test-todo42-unpack.js`，Playwright + Node 双侧校验，41 项断言全 PASS）**：真实样品 `C:\Users\Lin\Desktop\Glb\画稿飞扬v2.glb`（20 材质，9 贴图，含 2048×1152 大尺寸贴图）+ 边界样品 `_dev/test-empty-slot.glb`（纯几何、无贴图）。
+
+- **结构合法性**：`asset.version==='2.0'`；`buffers[0].uri`/全部 `images[].uri` 指向解压后磁盘上真实存在的文件；`buffers[0].byteLength` 精确等于 `.bin` 实际字节数；全部 `images[]` 条目已去掉 `bufferView`/`mimeType`；全部 `accessors[].bufferView` 索引在清理后的范围内，没有产生悬空引用；`bufferViews` 数量精确从 89 降到 80（验证了上面 bufferView 清理策略的判断没有多删/少删）。
+- **ZIP 格式本身的正确性**：Node 侧独立重新实现一遍 ZIP 读取（不 `require` 被测代码一行）+ 独立重新实现一遍 `crc32`，解压出的每个条目字节数据重算 CRC32 跟 ZIP 头里记录的 CRC 字段逐一比对，全部一致——证明打包器本身的字节拼装（偏移量、长度字段、CRC 字段）没写错，不是"因为浏览器还是能弹出保存对话框就假设它对了"。
+- **材质编辑传播**：先走真实 UI（点材质卡片改 `#mdBaseColor` 输入框，跟 `test-mat-editor.js` 同一手法）把材质 0 改成红色，再触发解包导出，确认导出结果里同名材质的 `baseColorFactor` 是编辑后的值（`[1, 0.014, 0.014, 1]` 附近），不是原始值。
+- **几何往返（两层独立校验）**：① 总量——Node 手写 `decodeAccessor()`（按 glTF 2.0 规范手算 `componentType`/`type`/`byteStride` 独立解码，不调用 three.js 也不调用被测代码）从解压出的 `.bin` 算出总顶点数/总三角形数，跟"编辑前从 three.js 实时场景读到的 ground truth"精确一致（25018 顶点、31812 三角形，两边分毫不差）；② 具体值——抽 3 个节点（`MainBooth_1/2/3`）的首个顶点坐标，Node 独立解码出来的值跟编辑前 three.js 里的值逐分量精确相等（容差 1e-4，实测完全相等，因为几何数据没有被这次编辑触碰、也没有经过任何有损转换）。
+  - **踩了一个坑，如实记录**：第一版验证脚本直接 `window.__debugScene.traverse()`（`scene` 本身）统计"编辑前"的 mesh/顶点数，得到 87 个 mesh、28599 顶点，比实际模型多出一大截，抽样节点名字也变成了神秘的 `"X"`/`"Y"`/`"Z"`——排查发现 `scene` 里还混着 `TransformControls`（§19 gizmo）的内部辅助网格（轴柄用 `"X"`/`"Y"`/`"Z"` 命名），这些常驻 `scene.add()` 过、不属于模型本体的东西被一起数进去了。改成读 `window.__debugModels.model`（= `gltf.scene`，`exportGlbBlob()` 传给 `GLTFExporter.parse()` 的同一个对象）后数字精确对上——顺手在 `index.html` 的 `__debugModels` 调试钩子里补了 `model` getter（原来只有 `models`/`activeModelId`，没有直接暴露当前激活模型的 three.js 对象本身），并在 getter 旁边写了这条踩坑记录，方便以后的验证脚本别重蹈覆辙。
+- **贴图往返，两层独立校验**：① **尺寸多重集合比对**——9 张贴图各自用手写 PNG/JPEG 头解析器（同 #41 方法论）独立解出尺寸，跟原始 GLB 里 9 张贴图独立解出的尺寸做多重集合比对（`{width}x{height}` 计数），完全一致（含验证能找到样品文档提到的 2048×1152 那张）。**没有按数组下标位置比对**——如实记录一个真实发现：`GLTFExporter` 内部按材质遍历顺序重新生成 `images[]` 数组，导出结果的图片顺序跟原始文件的 `images[]` 顺序**不是**同一个（实测 9 张里第 0/1 位精确互换），下标对下标比较会比错，所以改成顺序无关的多重集合比对。② **像素级比对（非通用机制，如实标注）**——这份真实样品的 `textures[].name` 恰好带 `texture_source<N>_sampler<M>` 这种编码了原始 `textures[N].source` 的命名（原始文件自己的导出工具起的名字，不是本工具生成的），借这个巧合精确配对全部 9 对「导出图片 ↔ 原始图片」，用浏览器 `createImageBitmap`+`OffscreenCanvas` 解码成像素数组比较：4 张 PNG（无损格式）平均每通道像素差异精确为 0（canvas 编解码零噪声）；5 张 JPEG（有损格式）平均每通道差异在 0～1.07 之间（有损重新编码的正常代价，不是 bug）——**这里也如实记录一个技术限制**：`GLTFExporter` 导出时贴图统一经过「解码成 canvas 再重新编码」这一步（读 `processImage()` 源码确认，`ctx.drawImage()` + `canvas.toBlob(mimeType)`），不是像 #41 那样直接切原始文件字节，所以导出的贴图文件**字节层面不会跟原始文件逐字节相同**（跟 #41「逐字节相同」的验收标准不一样）——格式保留（PNG 还是 PNG、JPEG 还是 JPEG，靠 `texture.userData.mimeType` 全程带着），像素内容对 PNG 是近似无损、对 JPEG 是可接受的有损重新压缩，这是"必须用 `exportGlbBlob()`/`GLTFExporter.parse()` 拿到反映当前编辑状态的数据"这条任务要求（第 1 条）带来的必然代价，不是这次实现挑的一个更差的路径。
+- **GLTFLoader 独立往返加载**：新增独立 harness 页面 `_dev/harness-gltfload.html`（不进 `index.html`，纯 `three.js`+`GLTFLoader` 的最小页面，因为 `CHANGELOG.md` 记录过本工具本体不支持读入分离格式，这次任务范围也没有要求做"读入"）——通过本机 PHP 开发服务器把解压出的文件夹整体挂到 `http://127.0.0.1:18244/_dev/downloads-42/extracted-real/`（含中文文件名 `画稿飞扬v2.gltf`，验证过 Chromium+PHP 内置服务器的 UTF-8 URL 编解码全程正常，不是这次特意回避的风险点），`GLTFLoader.load(url,...)` 无报错完整解析完成，`mesh`/顶点/三角形统计**三方**互相一致（three.js 编辑前实时场景 ground truth / Node 手写 `decodeAccessor` / `GLTFLoader` 重新加载）。
+- **边界情况：纯几何无贴图**——`_dev/test-empty-slot.glb`，确认解包结果 zip 只有 `.gltf`+`.bin` 两个条目、没有 `images/*`，导出的 `.gltf` 的 `images` 字段为空/不存在，`GLTFLoader` 同样无报错加载成功。
+- 控制台全程 0 报错（主页面 + 两个独立 harness 页面）。
+
+**调试钩子**：`window.__debugUnpackGltf = { unpackGlbToGltf, splitGlbChunks, convertGltfJsonToSeparate, buildZipBlob, crc32, exportGlbBlob }`，同既有 `__debugTexExport`/`__debugAlign` 一套暴露方式。另在 `window.__debugModels` 补了 `model` getter（见上面"踩了一个坑"部分）。
+
+**测试脚本/文件**：`_dev/test-todo42-unpack.js`（Playwright，41 项断言，可重跑复查）、`_dev/harness-gltfload.html`（独立 GLTFLoader 往返验证 harness）；下载产物 `_dev/downloads-42/`（含解压出的 `.gltf`+`.bin`+贴图，供人工复查）；截图 `_dev/shots-42/42-00-menu-with-unpack-entry.png`（菜单新增项）。
+
+### #43 实现记录（相机视角卷展栏，2026-08-08 完成）
+
+**开工前先搜了一遍 `index.html`**：「相机视角」「cameraView」「视角卷展栏」全部无匹配，没有任何残留实现，从零开始。
+
+**视角字段 `{name, position, target, fov, zoom, up}`——比口述需求原文多了一个 `up`，不是凭空发明**：去代码核对既有 4 个预设视角 `frameViewportPreset()` 是怎么设相机的，发现「顶视」预设会把 `camera.up` 从默认 `(0,1,0)` 改成 `(0,0,-1)`（跟视线方向平行会退化的既有处理，见该函数注释），`OrbitControls` 拖拽过程中不会自动纠正这个值——如果用户点了「顶视」以后又手动微调机位、这时新建一个视角，不存 `up` 的话，「应用」这条视角时相机会沿用当时环境里的 `up`（不受应用动作影响），不一定等于保存时的 `up`，不满足"精确复现"这条硬要求。`position`/`target` 对应 `camera.position`/`controls.target`（跟 `frameViewportPreset()` 一致）；`fov` 对应 `camera.fov`；`zoom` 对应 `camera.zoom`——核对过 `vendor/controls/OrbitControls.js`，本项目 `OrbitControls` 没有开 `zoomToCursor`，鼠标滚轮缩放走 `dollyIn`/`dollyOut`（改 `camera.position` 到目标的距离，不改 `.zoom`），所以 `zoom` 实测总是 `1`，但字段仍按 `camera.zoom` 完整存取，不假设用不上。存储不做 `toFixed()` 量化（§8 基点系统的 `position.toFixed(4)`/`zRotation.toFixed(2)` 是那边自己的既有设计，这次没有照抄——相机视角要求的复现精度比基点更高，量化到 4 位小数的米制误差量级正好跟验收要求的 1e-4 容差贴脸，没有必要冒这个险，直接存 `Vector3.toArray()`/`camera.fov`/`camera.zoom` 的原始浮点值）。
+
+**每模型独立存储**：`anno.cameraViews`（数组），初始化时 `old.cameraViews || []`（没有基点系统那种"首次加载自动种一条"的规则，纯空数组起步，等用户自己点「＋新建视角」）。因为 `anno` 整体已经在 #39 的 `harvestModuleVarsInto()`/`applyContextToModuleVars()` 里按 `ModelContext` 搬运，`cameraViews` 从写下第一行代码起就自动获得多模型隔离，不需要另外接一遍隔离逻辑——这是这次任务里少数"跟着现有架构白拿正确性"的地方，验证部分详见下面。
+
+**UI：折叠形态选了「点图标弹出小面板」，不是 `<details>` 卷展栏**——两种候选参考了任务里点名的两个既有先例：§17.3 场景 Tab 元数据卷展栏（`<details>`，嵌在右侧面板的正常文档流里，展开会把下面的兄弟内容顺流推挤）、header 三个下拉菜单（`场景 ▾`/`打开GLB ▾`/`另存为GLB ▾`，`.menu-wrap`/`.menu-btn`/`.menu-dropdown` + `registerMenu()`，展开的面板是 `position:absolute` 浮层，不影响周围元素排版）。这次入口要浮在视口左上角（`position:absolute` 的 `#viewTools` 正下方），`<details>` 展开会把它自己的高度实打实地推挤给排在它下面的兄弟元素——但这里根本没有"下面的兄弟元素"需要考虑排版联动，反而是"不能让面板展开时把视口内容渲染逻辑复杂化"，`.menu-dropdown` 那种不影响文档流的浮层完全贴合这个场景，所以选了后者，直接复用 `registerMenu()` 这套点击外部/ESC 自动关闭的基础设施，没有另外写一套开关逻辑——这是"折叠在菜单内部"字面意义上最贴近的既有组件（本来就是"菜单"）。
+
+**跟 4 个预设视角按钮的空间关系**：新增外层包装 `#viewToolsGroup`（`position:absolute;top:12px;left:12px;display:flex;flex-direction:column;gap:8px`），把原来直接扛 `position:absolute` 的 `#viewTools` 挪进去当普通 flex 子项，新增的 `#camViewsWrap` 是它下面的第二个 flex 子项——用 flex `gap` 让两个 dock 竖排贴在一起，没有手算 `#viewTools` 4 个按钮的实际渲染高度再拿这个像素数字去定第二个 dock 的 `top` 偏移（`#viewTools` 按钮数量/尺寸以后一变，硬编码的偏移量就得跟着改，脆弱）。触发按钮 `#camViewsBtn` 视觉上没有用 header 菜单的 `.menu-btn` 样式（那是有边框的顶栏按钮语言，跟视口角落的紧凑工具条不搭），照抄 `#viewTools button` 同一套配色公式（背景 `var(--panel)`、文字 `var(--ink-dim)`，hover/`.open` 变 `var(--accent)`），只是单独一个按钮不需要 `gap:1px` 露分隔线那套，给它自己一圈 1px 边框当独立小方块。按钮文案 `📷 视角 (N) ▾` 常驻显示当前视角数量。
+
+**四个操作**：
+
+- **新建**（`addCameraView()`）：把 `camera.position`/`controls.target`/`camera.up`/`camera.fov`/`camera.zoom` 实时状态整份存成一条新记录。默认命名照抄 §8 `uniqueBasepointName()` 的防重名写法（`uniqueCameraViewName(base, excludeIdx=-1)`：不撞名直接用本名，撞了从 2 开始找第一个没占用的后缀），"视角"/"视角2"……
+- **应用**（`applyCameraView(idx)`）：直接跳变，没有过渡动画——去代码核对过 4 个预设视角 `frameViewportPreset()` 本身就是 `camera.position.copy()`/`controls.target.copy()` 瞬间切换，没有任何 tween/动画中间态，所以这里跟着用同一套体验，没有额外发明过渡效果。应用后 `camera.updateProjectionMatrix()`（`fov`/`zoom` 改了必须调，不调的话画面不会用新视野角重新投影）+ `controls.update()`。
+- **重命名**（`renameCameraView(idx, newName)`）：改 `name` 字段，同样走 `uniqueCameraViewName(trimmed, idx)`（排除自己）防重名；空字符串或跟原名相同视为无操作，只重渲染把输入框内容恢复，不产生一次空写入。
+- **删除**（`deleteCameraView(idx)`）：从数组里 `splice`。
+
+**"当前生效视角"概念——引入了，跟 `activeViewportPreset` 平行但不合并**：任务原文给了"可以不需要"的自由裁量，最终判断是引入更好——用户很可能会先点一个预设视角、手动微调、再存成书签，这种"哪个视角当前生效"的直觉在 4 个预设按钮上已经有了（`activeViewportPreset` + `.active` 高亮 + 手动拖拽后清空），相机视角列表如果完全没有对应反馈，用户点了"应用"却看不出任何列表反馈，体验上是倒退。新增 `activeCameraViewName`（模块级 `let`，不放进 `ModelContext`——纯粹是"哪一行该高亮"的展示状态，不是持久数据，跟 `activeViewportPreset` 本身也不在 `ModelContext` 里同一个归类）：
+
+- 应用某条视角后 `activeCameraViewName` 设成那条的 `name`，同时清空 `activeViewportPreset`（应用的保存视角不属于 4 个预设中任何一个，跟点了预设按钮要清空基点/视角另一边高亮同一个"互斥"理由，双向都遵守）；点 4 个预设按钮时同理反过来清空 `activeCameraViewName`（`frameViewportPreset()` 内部已经有 `activeViewportPreset=name` 这行，这次任务没有改这个函数本身，而是在 `controls.addEventListener('start', ...)` 手动拖拽清空逻辑里顺带清了 `activeCameraViewName`——两套高亮各自在各自的"生效"函数里正向设置，在同一个"手动拖拽=脱离预设状态"事件里统一清空，没有互相調用对方的清空逻辑，保持代码路径独立不缠绕）。
+- 手动拖拽视口（`controls` 的 `'start'` 事件）：跟 `activeViewportPreset` 同一个既有理由——用户动过手之后画面不再精确是应用那一刻的样子，两个高亮态一起清空。
+- 删除/重命名：删除当前生效的那条，`activeCameraViewName` 清空（不留死引用）；重命名当前生效的那条，`activeCameraViewName` 跟着改名同步过去（不会因为名字对不上而无缘无故掉高亮）。
+- 切换模型（`switchActiveModel()`）/ 新模型成为激活模型（`preprocess()` 的 `becomesActive` 分支）：都清空 `activeCameraViewName`——即使新模型碰巧也有同名视角，那也是没有被真正应用过的，不该被误标成生效中。
+
+**实现过程中发现并修复的一个真实交互 bug（不是理论风险，Playwright 真实点击测出来的）**：应用/删除按钮的 `onclick` 内部都会同步调用 `renderCamViewsList()`（整段替换 `#camViewsList.innerHTML`），这会把刚被点击的那个按钮从 DOM 树上摘掉；`registerMenu()` 的"点外部关闭"判断依据是 `document` 级 `click` 监听器里的 `wrap.contains(e.target)`，这段判断在事件冒泡阶段执行——此时 `e.target` 虽然还是那个按钮的 JS 引用，但它已经被上面的 `innerHTML` 替换摘出了 DOM 树，`wrap.contains()` 对一个已经不在树里的节点返回 `false`，整次点击被误判成"点了下拉外部"，导致应用/删除一次面板就自己意外收起——真实复现方式：连续删除两条视角时，删完第一条面板自动关掉，第二条的删除按钮点不到（Playwright 报 `element is not visible` 超时）。修复：`renderCamViewsList()` 里给应用/删除两个按钮的 `onclick` 都加一行 `e.stopPropagation()`（放在处理函数最前面，`applyCameraView`/`deleteCameraView` 调用之前），让这次点击事件根本不冒泡到 `document`，从源头避免误判；这跟"应用/删除后要不要关闭面板"这个产品决定无关（这次的产品决定是"应用/删除后面板保持展开，方便连续操作/对比多条视角"，模型切换器 `renderModelSwitcher()` 那边选的是相反的产品决定——点了就调用 `modelMenu.close()` 主动关闭，两者都是"显式决定"，不是被这个 DOM detach 时序坑意外决定的）。
+
+**多模型隔离验证**：`_dev/test-todo43-cameraviews.js`（Playwright，60 项断言全 PASS），真实样品 `C:\Users\Lin\Desktop\Glb\画稿飞扬v2.glb` 加载两次（第二次改文件名 `huagao-model-b.glb` 模拟第二个不同 GLB，参考 #39/#40 方法论）：模型 A 新建 1 条视角（"视角"）→ 追加加载模型 B（真实样品都会自动种一个默认基点，触发 #40 「对齐到已加载模型」选择器，点跳过）→ 此刻仍在模型 A，列表长度不受影响（仍是 1）→ 切到模型 B，`cameraViews` 精确为空数组（不显示 A 的记录）→ 模型 B 自己新建一条，默认命名精确是"视角"（B 自己独立计数，不受 A 已有"视角"这个名字影响，证明防重名集合是按模型各自的 `anno.cameraViews` 算的，不是全局共享）→ 切回模型 A，记录精确保留（长度仍为 1，名字未变）。
+
+**新建/应用精度验证（容差 1e-4，实测达到浮点噪声量级）**：点「正视」预设制造一个确定的相机状态，Playwright 侧独立读取 `window.__debugViewport.camera.position/controls.target/camera.up/camera.fov/camera.zoom`（不经过被测的新建/应用函数）记录下来；点「＋新建视角」后，读 `anno.cameraViews[0]` 逐分量比对，实测差值精确为 `0`（`position`/`target`/`up`/`fov`/`zoom` 全部）；再点「顶视」预设漂移到明显不同的状态（用距离 >0.01 的检查确认真的漂移了，不是巧合没变），点「应用」后再次独立读取相机实际状态，逐分量比对回保存前记录的值，差值同样精确为 `0`（远优于 1e-4 的验收容差）。重命名（含撞名防重复防重名）、删除（含"删的正好是当前生效的"级联清空 `activeCameraViewName`）的数据正确性也在同一个脚本里逐项验证。
+
+**折叠/展开交互验证**：默认收起（`#camViewsDropdown[hidden]`）、点击触发按钮展开（`hidden` 移除 + `.open` 高亮类）、点击外部关闭、空列表显示"暂无保存的视角"提示 + 仍能点「＋新建视角」。
+
+**回归测试**：`_dev/test-viewport-tools.js`（既有 4 个预设视角工具条，7 组断言全 PASS，确认 `#viewToolsGroup` 包装层重构没有破坏 `#viewTools` 本身的行为/按钮数量/文案）、`_dev/test-todo39-multimodel.js`（39 项 PASS）、`_dev/test-todo38-responsive.js`（58 项 PASS，确认 `#viewToolsGroup` 新增布局层没有引入横向溢出或跟 `#panel`/`#modeTools` 的几何冲突）、`_dev/test-basepoints.js`（全 PASS，确认 `anno` 初始化对象新增 `cameraViews` 字段没有影响基点相关逻辑）、`_dev/test-todo33-gizmo.js`（54 项 PASS，确认视口右侧 `#modeTools`/gizmo 不受视口左侧新增 dock 影响）。控制台全程 0 报错（贯穿新增测试脚本 + 全部重跑的既有回归测试）。
+
+**调试钩子**：`window.__debugCameraViews = { addCameraView, applyCameraView, renameCameraView, deleteCameraView, uniqueCameraViewName, renderCamViewsList, activeCameraViewName（getter）, cameraViews（getter，读当前 anno.cameraViews，因为 anno 会随模型切换/加载指向新对象，写成 getter 避免测试脚本读到陈旧快照——跟 __debugViewport.activeViewportPreset 同一个理由） }`，`window.__debugViewport` 沿用既有暴露方式未新增字段（`camera`/`controls` 已经在里面）。
+
+**测试脚本/截图**：`_dev/test-todo43-cameraviews.js`（Playwright，60 项断言全 PASS，可重跑复查）；截图 `_dev/shots-43/43-00-dropdown-open-empty.png`（默认折叠展开后的空状态）、`43-01-two-views.png`（两条视角记录，UI 布局全貌）、`43-02-applied-active-row.png`（应用后行高亮 + 视口画面切换）、`43-03-model-b-isolated.png`（模型 B 独立列表）。

@@ -97,6 +97,13 @@ interface UserScheme {
 - **`zRotation` 具体绕哪根轴**（这条文档原文没写清楚，实现时一并定下来）：字段名字面沿用了「只绕 Z 轴」的说法，但本项目 GLTF/three.js 场景是 **Y-up**（`index.html` 里 `preprocess()` 摆位逻辑、`buildTables` 默认相机推荐值都拿 `size.y` 当高度轴——Y 是这个场景真正的竖直轴，X/Z 是地面两个水平轴）。「只绕竖直轴的朝向角」才是「建筑测量方位角」这个概念本该对应的东西——绕水平轴转是「歪头」不是「朝向」。判断契约原文作者是习惯了 CAD/BIM 常见的 Z-up 坐标系（Revit/AutoCAD 那一路）随手写的说法。所以 **`zRotation` 实际存取的是世界空间 Y 轴欧拉分量**，字段名保留 `zRotation` 只是跟这份文档、`Doc/EDITOR-SPEC.md` §8 的既有措辞保持字面一致，没有为了语义准确另外改名引发连锁的字段改名。GLB 原生约定探测、可视化 gizmo、节点「相对基点坐标」计算，三处统一用这个约定，内部没有「一半按 Y 一半按 Z」的不一致。
 - **坐标系**：`position`/`zRotation` 用的是 3AS editor 内部「模型整体缩放+落地居中」归一化之后的场景坐标系（`nodeObjects.matrixWorld`），跟 `BoundingBoxAnnotation.center`（见第六节）、`SceneBboxOverride.center` 同一套坐标系，可以直接相减比较——这也是「节点相对基点坐标」这个概念成立的前提（基点和节点世界坐标必须在同一个坐标系里才谈得上"相对"）。
 
+**2026-08-07 回填（对应 `Doc/TODO.md` #37，`Doc/EDITOR-SPEC.md` §17.4 决策记录第5点，"允许多基点/要有历史/JSON要带解释"三个要求）**：
+
+- **"哪个基点是默认"这件事从纯代码 fallback 变成用户可控**：上面①②③优先级规则原本只用来决定"首次加载时种一颗默认基点种子"，"留空关联的节点 fallback 到哪个基点"这个问题此前硬编码成 `basepoints[0]`（数组第一个）。这次新增 `Annotations.defaultBasepointName`（`string | null`，见 `SPEC.md`）——用户在 editor「场景」Tab 每个基点行的下拉菜单里选「设为默认基点」，这个值就覆盖掉 `basepoints[0]` 这条老规则，成为新的全局默认。**用户有最终决定权**：哪怕场景里确实存在 Origin 节点探测出来的基点，手动指定的默认会盖过它，不是两者取某种折中。没有手动指定时（`defaultBasepointName` 是 `null`，或者指向的基点已经被删除）退回 `basepoints[0]` 这条老规则，行为跟 #37 之前完全一致，不破坏既有实现/契约。
+- **`MeasurementBasepoint.resolvedReason`（新增，只读）**：导出注释 JSON 时才计算、不是 `anno.basepoints[]` 内存对象的常驻字段（`buildExportJson()` 现算现拼一份浅拷贝），人类可读说明"这个基点是不是当前默认、如果是靠哪条规则"，四选一字符串——三种"是当前默认"的原因（`GLB原生Origin节点`/`场景包围盒中心（兜底）`/`用户手动指定为默认`）+ 一种"不是当前默认"（`非当前默认基点`，场景允许多个基点，全局默认只有一个，其余的都落进这一类）。完整字段定义/枚举值见 `SPEC.md` `MeasurementBasepoint` 接口小节，判断逻辑的实现细节（含下面这条边界情况）见 `Doc/EDITOR-SPEC.md` §8 2026-08-07 实现记录。
+- **关键边界情况**：GLB 场景里确实有原生 Origin 节点（`basepoints[0].source.priority===1`），用户又手动把**另一个**基点指定成默认——此时那个 Origin 节点基点自己的 `source` 字段**不会被改动**（它自己确实还是"靠 Origin 节点探测出来的"这个历史事实没有变），但它的 `resolvedReason` 会变成 `非当前默认基点`，不再是 `GLB原生Origin节点`——因为 `resolvedReason` 回答的是"现在正在生效的是不是它"，不是"它自己历史上是怎么来的"，两者是分开的两件事，不会因为 `source` 字段没变就误导性地报告它还在生效。
+- **"要有历史"**：基点新增/编辑（位置/朝向/名字）/删除/设为默认这几类操作全部接入了 editor 现有的两套机制——单步撤销栈（`Doc/EDITOR-SPEC.md` §13 `pushUndo`）+ 操作脚本记录/重放（§10 `recordScriptOp`，`ScriptTarget.kind` 新增 `'basepoint'`，`SPEC.md` 同步）。不是新开一套版本历史/时间线 UI，复用的是 editor 已有的这两套通用机制，跟决策记录原文"复用现有撤销栈+操作脚本重放这两套机制"的措辞一致。
+
 ---
 
 ## 六、包围盒（Bounding Box）数据同步
